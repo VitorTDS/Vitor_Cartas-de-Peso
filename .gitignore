@@ -3,3 +3,4 @@ data/*.sqlite
 data/*.sqlite-*
 .env
 npm-debug.log*
+logs/
