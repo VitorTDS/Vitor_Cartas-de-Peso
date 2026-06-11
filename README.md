@@ -69,5 +69,6 @@ O teste sobe uma instância local em outra porta, autentica, cria uma carta, reg
 - Frontend SPA em HTML/CSS/JavaScript nativo para reduzir dependências e facilitar execução em computador industrial.
 - Os cálculos ficam centralizados em `src/calculos.js`.
 - A camada `src/biometricService.js` concentra a biometria. A versão inicial é simulada e não armazena imagem de digital.
+- O sistema detecta o leitor iDBio Pro (`VID_3036&PID_0002`) quando conectado ao Windows, mas a captura real depende do SDK/protocolo do fabricante.
 - Toda criação/alteração relevante grava auditoria na tabela `auditoria`.
 - Para produção, configure `JWT_SECRET`, política de backup do SQLite ou migração para PostgreSQL, HTTPS e rotação de senhas.

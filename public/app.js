@@ -4,6 +4,7 @@ const state = {
   view: 'dashboard',
   data: { produtos: [], embalagens: [], maquinas: [], cartas: [], auditoria: [], usuarios: [], logsAcesso: [], assinaturas: [] },
   lockUsers: [],
+  biometricStatus: null,
   selectedUserId: Number(localStorage.getItem('selectedUserId') || 0),
   cartaAtual: null,
   toast: '',
@@ -54,6 +55,7 @@ async function carregarLock() {
     api('/api/lock/users'),
     api('/api/configuracoes/bloqueio').catch(() => ({ bloqueioAutomaticoMinutos: '15' })),
   ]);
+  state.biometricStatus = await api('/api/biometria/status').catch(() => null);
   state.lockUsers = users.data;
   state.bloqueioAutomaticoMinutos = config.bloqueioAutomaticoMinutos || '15';
   localStorage.setItem('bloqueioAutomaticoMinutos', state.bloqueioAutomaticoMinutos);
@@ -162,6 +164,7 @@ function lockView() {
             <div class="biometric-status ${state.biometricResult === 'invalid' ? 'bad' : state.biometricResult === 'recognized' ? 'ok' : ''}">
               ${h(state.lockStatus || 'Aguardando digital...')}
             </div>
+            <p class="hint">${h(state.biometricStatus?.hardwareDetected ? `Leitor conectado: ${state.biometricStatus.device.name} ${state.biometricStatus.device.port || ''}` : 'Modo biometria simulada para desenvolvimento.')}</p>
             <form id="lockForm">
               <input type="hidden" name="usuarioId" value="${selected.id}">
               <label for="pin">Entrar com PIN ou senha alternativa

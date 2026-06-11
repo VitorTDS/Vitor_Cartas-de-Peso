@@ -265,6 +265,10 @@ async function api(req, res) {
     return json(res, 200, { bloqueioAutomaticoMinutos: row?.valor || '15' });
   }
 
+  if (method === 'GET' && pathName === '/api/biometria/status') {
+    return json(res, 200, BiometricService.status());
+  }
+
   if (method === 'POST' && pathName === '/api/lock/auth') {
     const body = await lerBody(req);
     const row = get('SELECT * FROM usuarios WHERE id = ? AND status = ?', [Number(body.usuarioId), 'ativo']);
