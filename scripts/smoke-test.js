@@ -26,11 +26,22 @@ async function request(path, options = {}) {
   const server = spawn(process.execPath, ['--no-warnings', 'src/server.js'], { env, stdio: 'ignore' });
   try {
     await wait(1200);
-    const login = await request('/api/login', {
+    const lockUsers = await request('/api/lock/users');
+    const adminUser = lockUsers.data.find((u) => u.perfil === 'administrador');
+    const login = await request('/api/lock/auth', {
       method: 'POST',
-      body: JSON.stringify({ email: 'admin@sobral.local', senha: 'admin123' }),
+      body: JSON.stringify({ usuarioId: adminUser.id, metodo: 'pin', pin: 'admin123' }),
     });
     const auth = { Authorization: `Bearer ${login.token}` };
+    await request(`/api/usuarios/${adminUser.id}/biometria`, {
+      method: 'POST',
+      headers: auth,
+      body: '{}',
+    });
+    await request('/api/lock/auth', {
+      method: 'POST',
+      body: JSON.stringify({ usuarioId: adminUser.id, metodo: 'digital', biometricResult: 'recognized' }),
+    });
     const produtos = await request('/api/produtos', { headers: auth });
     const maquinas = await request('/api/maquinas-balancas', { headers: auth });
     const produto = produtos.data[0];
@@ -63,6 +74,19 @@ async function request(path, options = {}) {
     if (detalhe.coletas.length !== 1 || !detalhe.resumo.totalAmostras) {
       throw new Error('Resumo da carta não foi calculado.');
     }
+    await request(`/api/cartas/${carta.id}/fechamento`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({
+        statusFinal: 'aprovado',
+        conferidoPor: 'Smoke Test',
+        metodoAssinatura: 'pin',
+        pin: 'admin123',
+        justificativa: 'Fechamento de validação automatizada.',
+      }),
+    });
+    const logs = await request('/api/logs-acesso', { headers: auth });
+    if (!logs.data.length) throw new Error('Logs de acesso não foram registrados.');
     console.log('Smoke test OK');
   } finally {
     server.kill('SIGTERM');

@@ -7,6 +7,7 @@
 - [x] Criar frontend web responsivo em português brasileiro.
 - [x] Adicionar documentação de instalação e execução.
 - [x] Executar smoke test e corrigir falhas encontradas.
+- [x] Adicionar tela de bloqueio multiusuário, PIN, biometria simulada, logs de acesso e assinatura eletrônica.
 
 ## Revisão
 

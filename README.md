@@ -37,6 +37,12 @@ NODE_ENV=development
 ## Funcionalidades
 
 - Login com perfis de administrador, produção e qualidade.
+- Tela de bloqueio multiusuário com aparência de computador industrial compartilhado.
+- Login por PIN/senha alternativa e simulação de digital biométrica.
+- Cadastro simulado de digital por usuário, preparado para futura integração por SDK/WebAuthn.
+- Logs de acesso por usuário, método, status e dispositivo.
+- Bloqueio manual e bloqueio automático configurável por inatividade.
+- Assinatura eletrônica por PIN ou digital simulada em fechamento de carta.
 - Cadastro de produtos com densidade, volumes, pesos brutos, variação e quantidade de amostras.
 - Cadastro de embalagens.
 - Cadastro de máquinas, linhas e balanças.
@@ -62,5 +68,6 @@ O teste sobe uma instância local em outra porta, autentica, cria uma carta, reg
 - Backend em Node.js usando `node:http` e `node:sqlite`.
 - Frontend SPA em HTML/CSS/JavaScript nativo para reduzir dependências e facilitar execução em computador industrial.
 - Os cálculos ficam centralizados em `src/calculos.js`.
+- A camada `src/biometricService.js` concentra a biometria. A versão inicial é simulada e não armazena imagem de digital.
 - Toda criação/alteração relevante grava auditoria na tabela `auditoria`.
 - Para produção, configure `JWT_SECRET`, política de backup do SQLite ou migração para PostgreSQL, HTTPS e rotação de senhas.

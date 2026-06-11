@@ -3,9 +3,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { URL } = require('node:url');
 const config = require('./config');
-const { migrate, all, get, run, auditar, db } = require('./db');
+const { migrate, all, get, run, auditar, db, registrarAcesso, registrarAssinatura } = require('./db');
 const { verificarSenha, assinar, verificarToken, hashSenha } = require('./auth');
 const { calcularColeta, calcularResumoCarta } = require('./calculos');
+const BiometricService = require('./biometricService');
 
 const publicDir = path.resolve('public');
 
@@ -47,7 +48,7 @@ function usuarioDaReq(req) {
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
   const payload = verificarToken(token);
   if (!payload) return null;
-  return get('SELECT id,nome,email,perfil,status FROM usuarios WHERE id = ? AND status = ?', [payload.id, 'ativo']);
+  return mapUsuario(get('SELECT * FROM usuarios WHERE id = ? AND status = ?', [payload.id, 'ativo']));
 }
 
 function exigir(req, res, perfis = []) {
@@ -56,11 +57,22 @@ function exigir(req, res, perfis = []) {
     erro(res, 401, 'UNAUTHORIZED', 'Faça login para continuar.');
     return null;
   }
-  if (perfis.length && !perfis.includes(usuario.perfil)) {
+  if (perfis.length && !pode(usuario.perfil, perfis)) {
     erro(res, 403, 'FORBIDDEN', 'Seu perfil não tem permissão para esta ação.');
     return null;
   }
   return usuario;
+}
+
+function pode(perfil, perfis) {
+  if (perfil === 'administrador') return true;
+  if (perfis.includes(perfil)) return true;
+  if (perfil === 'supervisor' && (perfis.includes('producao') || perfis.includes('qualidade'))) return true;
+  return false;
+}
+
+function dispositivo(req) {
+  return req.headers['x-device-name'] || req.headers.host || 'computador-industrial';
 }
 
 function numeroObrigatorio(body, campo) {
@@ -73,6 +85,52 @@ function texto(body, campo, obrigatorio = true) {
   const valor = String(body[campo] ?? '').trim();
   if (obrigatorio && !valor) throw new Error(`Campo obrigatório: ${campo}`);
   return valor;
+}
+
+function mapUsuario(row) {
+  return row && {
+    id: row.id,
+    nome: row.nome,
+    nomeExibicao: row.nome_exibicao || row.nome,
+    matricula: row.matricula || '',
+    setor: row.setor || '',
+    cargo: row.cargo || '',
+    email: row.email,
+    perfil: row.perfil,
+    status: row.status,
+    avatarUrl: row.avatar_url || '',
+    digitalCadastrada: Boolean(row.digital_cadastrada),
+    biometricProvider: row.biometric_provider || 'simulado',
+    ultimoAcesso: row.ultimo_acesso,
+    criadoEm: row.criado_em,
+  };
+}
+
+function usuarioPayload(body, existente = {}) {
+  return {
+    nome: texto(body, 'nome'),
+    nomeExibicao: texto(body, 'nomeExibicao', false) || texto(body, 'nome'),
+    matricula: texto(body, 'matricula', false),
+    setor: texto(body, 'setor', false),
+    cargo: texto(body, 'cargo', false),
+    email: texto(body, 'email'),
+    perfil: texto(body, 'perfil'),
+    status: body.status === 'inativo' ? 'inativo' : 'ativo',
+    avatarUrl: texto(body, 'avatarUrl', false),
+    senha: texto(body, 'senha', !existente.id),
+  };
+}
+
+function validarAssinatura(usuario, body) {
+  const metodo = body.metodoAssinatura || body.metodo || 'pin';
+  const row = get('SELECT * FROM usuarios WHERE id = ? AND status = ?', [usuario.id, 'ativo']);
+  if (!row) return { ok: false, metodo, mensagem: 'Usuario nao encontrado.' };
+  if (metodo === 'digital') {
+    const ok = BiometricService.verify({ templateId: row.biometric_template_id, simulatedResult: body.biometricResult });
+    return { ok, metodo, mensagem: ok ? 'Digital reconhecida.' : 'Digital nao reconhecida.' };
+  }
+  const ok = verificarSenha(body.pin || body.senha || body.assinaturaResponsavel || '', row.senha_hash);
+  return { ok, metodo: 'pin', mensagem: ok ? 'PIN validado.' : 'PIN invalido.' };
 }
 
 function produtoPayload(body) {
@@ -187,15 +245,61 @@ async function api(req, res) {
   const pathName = url.pathname;
   const method = req.method;
 
+  if (method === 'GET' && pathName === '/api/lock/users') {
+    const usuarios = all(`
+      SELECT * FROM usuarios
+      WHERE status = 'ativo'
+      ORDER BY CASE perfil
+        WHEN 'administrador' THEN 1
+        WHEN 'supervisor' THEN 2
+        WHEN 'producao' THEN 3
+        WHEN 'qualidade' THEN 4
+        ELSE 5
+      END, nome_exibicao, nome
+    `).map(mapUsuario);
+    return json(res, 200, { data: usuarios });
+  }
+
+  if (method === 'GET' && pathName === '/api/configuracoes/bloqueio') {
+    const row = get('SELECT valor FROM configuracoes WHERE chave = ?', ['bloqueio_automatico_minutos']);
+    return json(res, 200, { bloqueioAutomaticoMinutos: row?.valor || '15' });
+  }
+
+  if (method === 'POST' && pathName === '/api/lock/auth') {
+    const body = await lerBody(req);
+    const row = get('SELECT * FROM usuarios WHERE id = ? AND status = ?', [Number(body.usuarioId), 'ativo']);
+    const usuario = mapUsuario(row);
+    if (!row || !usuario) {
+      registrarAcesso(null, body.metodo || 'desconhecido', 'falha', dispositivo(req), 'Usuario nao encontrado.');
+      return erro(res, 401, 'INVALID_LOGIN', 'Usuário não encontrado ou inativo.');
+    }
+
+    const metodo = body.metodo === 'digital' ? 'digital' : 'pin';
+    const ok = metodo === 'digital'
+      ? BiometricService.verify({ templateId: row.biometric_template_id, simulatedResult: body.biometricResult })
+      : verificarSenha(body.pin || body.senha || '', row.senha_hash);
+
+    registrarAcesso(usuario, metodo, ok ? 'sucesso' : 'falha', dispositivo(req), ok ? 'Acesso liberado.' : 'Falha de autenticação.');
+    if (!ok) return erro(res, 401, 'INVALID_LOGIN', metodo === 'digital' ? 'Digital não reconhecida.' : 'PIN ou senha inválida.');
+
+    return json(res, 200, {
+      token: assinar({ id: usuario.id, perfil: usuario.perfil }),
+      usuario,
+    });
+  }
+
   if (method === 'POST' && pathName === '/api/login') {
     const body = await lerBody(req);
     const usuario = get('SELECT * FROM usuarios WHERE email = ? AND status = ?', [texto(body, 'email'), 'ativo']);
     if (!usuario || !verificarSenha(body.senha, usuario.senha_hash)) {
+      registrarAcesso(usuario ? mapUsuario(usuario) : null, 'senha', 'falha', dispositivo(req), 'Login por e-mail falhou.');
       return erro(res, 401, 'INVALID_LOGIN', 'E-mail ou senha inválidos.');
     }
+    const mapped = mapUsuario(usuario);
+    registrarAcesso(mapped, 'senha', 'sucesso', dispositivo(req), 'Login por e-mail.');
     return json(res, 200, {
       token: assinar({ id: usuario.id, perfil: usuario.perfil }),
-      usuario: { id: usuario.id, nome: usuario.nome, email: usuario.email, perfil: usuario.perfil },
+      usuario: mapped,
     });
   }
 
@@ -203,6 +307,17 @@ async function api(req, res) {
   if (!usuario) return;
 
   if (method === 'GET' && pathName === '/api/me') return json(res, 200, { usuario });
+
+  if (pathName === '/api/configuracoes/bloqueio') {
+    const admin = exigir(req, res, ['administrador']);
+    if (!admin) return;
+    const body = await lerBody(req);
+    const permitido = ['5', '10', '15', '30', 'nunca'];
+    const valor = permitido.includes(String(body.bloqueioAutomaticoMinutos)) ? String(body.bloqueioAutomaticoMinutos) : '15';
+    run('INSERT OR REPLACE INTO configuracoes (chave,valor,atualizado_em) VALUES (?,?,CURRENT_TIMESTAMP)', ['bloqueio_automatico_minutos', valor]);
+    auditar(admin, 'configuracoes', 'bloqueio_automatico_minutos', 'alterou', null, { valor });
+    return json(res, 200, { bloqueioAutomaticoMinutos: valor });
+  }
 
   if (pathName === '/api/produtos') {
     if (method === 'GET') return json(res, 200, { data: all('SELECT * FROM produtos ORDER BY nome').map(mapProduto) });
@@ -264,13 +379,73 @@ async function api(req, res) {
   if (pathName === '/api/usuarios') {
     const admin = exigir(req, res, ['administrador']);
     if (!admin) return;
-    if (method === 'GET') return json(res, 200, { data: all('SELECT id,nome,email,perfil,status,criado_em FROM usuarios ORDER BY nome') });
+    if (method === 'GET') return json(res, 200, { data: all('SELECT * FROM usuarios ORDER BY nome_exibicao, nome').map(mapUsuario) });
     const body = await lerBody(req);
-    const info = run('INSERT INTO usuarios (nome,email,perfil,senha_hash,status) VALUES (?,?,?,?,?)', [
-      texto(body, 'nome'), texto(body, 'email'), texto(body, 'perfil'), hashSenha(texto(body, 'senha')), body.status || 'ativo',
+    const u = usuarioPayload(body);
+    const info = run(`
+      INSERT INTO usuarios (nome,nome_exibicao,matricula,setor,cargo,email,perfil,senha_hash,status,avatar_url)
+      VALUES (?,?,?,?,?,?,?,?,?,?)
+    `, [
+      u.nome, u.nomeExibicao, u.matricula, u.setor, u.cargo, u.email, u.perfil, hashSenha(u.senha), u.status, u.avatarUrl,
     ]);
-    auditar(admin, 'usuarios', info.lastInsertRowid, 'criou', null, { ...body, senha: '[protegida]' });
-    return json(res, 201, get('SELECT id,nome,email,perfil,status,criado_em FROM usuarios WHERE id=?', [info.lastInsertRowid]));
+    const novo = mapUsuario(get('SELECT * FROM usuarios WHERE id=?', [info.lastInsertRowid]));
+    auditar(admin, 'usuarios', info.lastInsertRowid, 'criou', null, { ...novo, senha: '[protegida]' });
+    return json(res, 201, novo);
+  }
+
+  const usuarioMatch = pathName.match(/^\/api\/usuarios\/(\d+)$/);
+  if (usuarioMatch && method === 'PUT') {
+    const admin = exigir(req, res, ['administrador']);
+    if (!admin) return;
+    const id = Number(usuarioMatch[1]);
+    const anteriorRow = get('SELECT * FROM usuarios WHERE id = ?', [id]);
+    const anterior = mapUsuario(anteriorRow);
+    if (!anteriorRow) return erro(res, 404, 'NOT_FOUND', 'Usuário não encontrado.');
+    const body = await lerBody(req);
+    const u = usuarioPayload(body, anterior);
+    const senhaHash = u.senha ? hashSenha(u.senha) : anteriorRow.senha_hash;
+    run(`
+      UPDATE usuarios SET nome=?, nome_exibicao=?, matricula=?, setor=?, cargo=?, email=?, perfil=?, senha_hash=?, status=?, avatar_url=?
+      WHERE id=?
+    `, [u.nome, u.nomeExibicao, u.matricula, u.setor, u.cargo, u.email, u.perfil, senhaHash, u.status, u.avatarUrl, id]);
+    const novo = mapUsuario(get('SELECT * FROM usuarios WHERE id=?', [id]));
+    auditar(admin, 'usuarios', id, 'alterou', anterior, { ...novo, senha: '[protegida]' });
+    return json(res, 200, novo);
+  }
+
+  const biometriaMatch = pathName.match(/^\/api\/usuarios\/(\d+)\/biometria$/);
+  if (biometriaMatch && method === 'POST') {
+    const admin = exigir(req, res, ['administrador']);
+    if (!admin) return;
+    const id = Number(biometriaMatch[1]);
+    const usuarioBio = mapUsuario(get('SELECT * FROM usuarios WHERE id = ?', [id]));
+    if (!usuarioBio) return erro(res, 404, 'NOT_FOUND', 'Usuário não encontrado.');
+    const enrollment = BiometricService.enroll(id);
+    run('UPDATE usuarios SET biometric_template_id=?, biometric_provider=?, digital_cadastrada=1 WHERE id=?', [
+      enrollment.templateId,
+      enrollment.provider,
+      id,
+    ]);
+    auditar(admin, 'usuarios', id, 'cadastrou_digital', null, { usuarioId: id, provider: enrollment.provider, templateId: '[protegido]' });
+    return json(res, 200, { usuario: mapUsuario(get('SELECT * FROM usuarios WHERE id = ?', [id])), biometric: { provider: enrollment.provider, status: 'cadastrada' } });
+  }
+
+  if (pathName === '/api/logs-acesso' && method === 'GET') {
+    exigir(req, res, ['administrador', 'qualidade', 'consulta_auditoria']);
+    return json(res, 200, { data: all('SELECT * FROM logs_acesso ORDER BY criado_em DESC LIMIT 500') });
+  }
+
+  if (pathName === '/api/assinaturas-eletronicas' && method === 'GET') {
+    exigir(req, res, ['administrador', 'qualidade', 'consulta_auditoria']);
+    return json(res, 200, { data: all('SELECT * FROM assinaturas_eletronicas ORDER BY criado_em DESC LIMIT 500') });
+  }
+
+  if (pathName === '/api/assinaturas-eletronicas' && method === 'POST') {
+    const body = await lerBody(req);
+    const assinatura = validarAssinatura(usuario, body);
+    if (!assinatura.ok) return erro(res, 401, 'SIGNATURE_FAILED', assinatura.mensagem);
+    registrarAssinatura(usuario, texto(body, 'acao'), body.entidade || '', body.entidadeId || '', assinatura.metodo, body.observacao || '');
+    return json(res, 201, { status: 'assinada', metodo: assinatura.metodo, usuario: mapUsuario(get('SELECT * FROM usuarios WHERE id=?', [usuario.id])) });
   }
 
   if (pathName === '/api/cartas') {
@@ -304,11 +479,11 @@ async function api(req, res) {
       Number(body.volumeMinimoMl || produto.volumeMinimoMl), Number(body.volumeMaximoMl || produto.volumeMaximoMl),
       Number(body.pesoBrutoMinimoG || produto.pesoBrutoMinimoG), Number(body.pesoBrutoMaximoG || produto.pesoBrutoMaximoG),
       maq?.id || null, body.maquinaEnvase || maq?.maquina_envase || '', body.linha || maq?.linha || '', body.balanca || maq?.balanca || '',
-      body.dataAbertura || new Date().toISOString(), body.responsavelAbertura || usuario.nome,
+      body.dataAbertura || new Date().toISOString(), body.responsavelAbertura || operador.nome,
       Number(body.frequenciaMinutos || 30), Number(body.toleranciaMinutos || 10), Number(body.quantidadeAmostras || produto.quantidadeAmostras || 10), body.observacoes || '',
     ]);
     const carta = cartaCompleta(info.lastInsertRowid);
-    auditar(usuario, 'cartas', carta.id, 'criou', null, carta);
+    auditar(operador, 'cartas', carta.id, 'criou', null, carta);
     return json(res, 201, carta);
   }
 
@@ -345,11 +520,11 @@ async function api(req, res) {
       INSERT INTO coletas (carta_id,numero_coleta,responsavel,data,hora,tara_embalagem_g,pesos_brutos_json,resultado_json,status)
       VALUES (?,?,?,?,?,?,?,?,?)
     `, [
-      carta.id, Number(body.numeroColeta), body.responsavel || usuario.nome, texto(body, 'data'), texto(body, 'hora'),
+      carta.id, Number(body.numeroColeta), body.responsavel || operador.nome, texto(body, 'data'), texto(body, 'hora'),
       Number(body.taraEmbalagemG), JSON.stringify(pesos), JSON.stringify(resultado), resultado.status,
     ]);
     const coleta = coletasDaCarta(carta.id).find((item) => item.id === Number(info.lastInsertRowid));
-    auditar(usuario, 'coletas', info.lastInsertRowid, 'criou', null, coleta);
+    auditar(operador, 'coletas', info.lastInsertRowid, 'criou', null, coleta);
     return json(res, 201, coleta);
   }
 
@@ -361,21 +536,28 @@ async function api(req, res) {
     if (!carta) return erro(res, 404, 'NOT_FOUND', 'Carta não encontrada.');
     const anterior = { ...carta };
     const body = await lerBody(req);
+    const assinatura = validarAssinatura(conferente, body);
+    if (!assinatura.ok) return erro(res, 401, 'SIGNATURE_FAILED', assinatura.mensagem);
+    if (!body.justificativa && body.statusFinal && body.statusFinal !== 'aprovado') {
+      return erro(res, 422, 'JUSTIFICATIVA_REQUIRED', 'Informe uma justificativa para fechamento com ressalva ou reprovação.');
+    }
     run('UPDATE cartas SET status=?, justificativa=?, conferido_por=?, assinatura_responsavel=?, fechada_em=? WHERE id=?', [
       body.statusFinal || calcularResumoCarta(carta, coletasDaCarta(carta.id)).statusFinalSugerido,
       body.justificativa || '',
       body.conferidoPor || conferente.nome,
-      body.assinaturaResponsavel || body.conferidoPor || conferente.nome,
+      `${conferente.nome} (${assinatura.metodo})`,
       new Date().toISOString(),
       carta.id,
     ]);
     const novo = cartaCompleta(carta.id);
+    registrarAssinatura(conferente, 'fechamento_carta', 'cartas', carta.id, assinatura.metodo, body.justificativa || '');
     auditar(conferente, 'cartas', carta.id, 'fechou', anterior, novo);
     return json(res, 200, { carta: novo, resumo: calcularResumoCarta(novo, coletasDaCarta(carta.id)) });
   }
 
   if (pathName === '/api/auditoria' && method === 'GET') {
-    exigir(req, res, ['administrador', 'qualidade']);
+    const auditor = exigir(req, res, ['administrador', 'qualidade', 'consulta_auditoria']);
+    if (!auditor) return;
     return json(res, 200, { data: all('SELECT * FROM auditoria ORDER BY criado_em DESC LIMIT 300') });
   }
 
