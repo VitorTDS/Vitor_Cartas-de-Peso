@@ -1,0 +1,23 @@
+{
+  "name": "cartas-de-peso-sobral",
+  "version": "0.1.0",
+  "description": "Sistema web para gerenciamento de cartas de peso e controle de volume por densidade.",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "node --no-warnings src/server.js",
+    "start": "node --no-warnings src/server.js",
+    "smoke": "node --no-warnings scripts/smoke-test.js"
+  },
+  "keywords": [
+    "cartas-de-peso",
+    "controle-de-envase",
+    "sqlite",
+    "node"
+  ],
+  "author": "",
+  "license": "ISC",
+  "engines": {
+    "node": ">=24"
+  }
+}
