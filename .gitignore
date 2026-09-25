@@ -4,3 +4,7 @@ data/*.sqlite-*
 .env
 npm-debug.log*
 logs/
+
+# Arquivos temporários locais
+%RUN%
+tmp/
