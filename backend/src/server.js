@@ -7,31 +7,58 @@ const { migrate, all, get, run, auditar, db, registrarAcesso, registrarAssinatur
 const { verificarSenha, assinar, verificarToken, hashSenha } = require('./auth');
 const { calcularColeta, calcularResumoCarta } = require('./calculos');
 
-const publicDir = path.resolve('public');
+const publicDir = path.resolve(__dirname, '..', '..', 'frontend');
+const COOKIE_NAME = 'sobral_session';
+const loginAttempts = new Map();
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_BLOCK_MS = 15 * 60 * 1000;
+const dummyPasswordHash = hashSenha('senha-invalida-para-comparacao');
+
+function securityHeaders() {
+  return {
+    'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'same-origin',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+  };
+}
 
 function json(res, status, body, headers = {}) {
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
-    'X-Content-Type-Options': 'nosniff',
-    'X-Frame-Options': 'DENY',
-    'Referrer-Policy': 'same-origin',
+    'Cache-Control': 'no-store',
+    ...securityHeaders(),
     ...headers,
   });
   res.end(JSON.stringify(body));
 }
 
-function erro(res, status, code, message, details = []) {
-  json(res, status, { error: { code, message, details } });
+function erro(res, status, code, message, details = [], headers = {}) {
+  json(res, status, { error: { code, message, details } }, headers);
 }
 
 function lerBody(req) {
   return new Promise((resolve, reject) => {
     let data = '';
+    let bytes = 0;
+    let rejected = false;
     req.on('data', (chunk) => {
+      if (rejected) return;
+      bytes += chunk.length;
+      if (bytes > config.maxBodyBytes) {
+        rejected = true;
+        const err = new Error('Payload muito grande.');
+        err.status = 413;
+        err.code = 'PAYLOAD_TOO_LARGE';
+        reject(err);
+        return;
+      }
       data += chunk;
-      if (data.length > 2_000_000) reject(new Error('Payload muito grande.'));
     });
     req.on('end', () => {
+      if (rejected) return;
       if (!data) return resolve({});
       try {
         resolve(JSON.parse(data));
@@ -42,12 +69,75 @@ function lerBody(req) {
   });
 }
 
-function usuarioDaReq(req) {
+function cookies(req) {
+  return Object.fromEntries(String(req.headers.cookie || '').split(';').map((item) => {
+    const index = item.indexOf('=');
+    if (index < 0) return ['', ''];
+    return [item.slice(0, index).trim(), decodeURIComponent(item.slice(index + 1).trim())];
+  }).filter(([key]) => key));
+}
+
+function tokenDaReq(req) {
   const auth = req.headers.authorization || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+  return auth.startsWith('Bearer ') ? auth.slice(7) : cookies(req)[COOKIE_NAME];
+}
+
+function cookieSessao(token, maxAge = config.sessionMinutes * 60) {
+  const secure = config.cookieSecure ? '; Secure' : '';
+  return `${COOKIE_NAME}=${encodeURIComponent(token || '')}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure}`;
+}
+
+function emitirSessao(row) {
+  const token = assinar({ id: row.id, perfil: row.perfil, sv: Number(row.sessao_versao || 1) });
   const payload = verificarToken(token);
+  return { token, expiresAt: payload.exp * 1000 };
+}
+
+function loginKey(req, identificador) {
+  return `${req.socket.remoteAddress || 'local'}:${String(identificador || '').trim().toLowerCase()}`;
+}
+
+function bloqueioLogin(req, identificador) {
+  const key = loginKey(req, identificador);
+  const entry = loginAttempts.get(key);
+  if (!entry) return null;
+  if (entry.blockedUntil > Date.now()) return Math.ceil((entry.blockedUntil - Date.now()) / 1000);
+  if (Date.now() - entry.firstAttempt > LOGIN_WINDOW_MS) loginAttempts.delete(key);
+  return null;
+}
+
+function registrarFalhaLogin(req, identificador) {
+  const key = loginKey(req, identificador);
+  const now = Date.now();
+  const current = loginAttempts.get(key);
+  const entry = !current || now - current.firstAttempt > LOGIN_WINDOW_MS
+    ? { count: 0, firstAttempt: now, blockedUntil: 0 }
+    : current;
+  entry.count += 1;
+  if (entry.count >= LOGIN_MAX_ATTEMPTS) entry.blockedUntil = now + LOGIN_BLOCK_MS;
+  loginAttempts.set(key, entry);
+}
+
+function limparFalhasLogin(req, identificador) {
+  loginAttempts.delete(loginKey(req, identificador));
+}
+
+function validarNovaSenha(senha) {
+  const value = String(senha || '');
+  if (value.length < 10) return 'A senha deve ter pelo menos 10 caracteres.';
+  const groups = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter((pattern) => pattern.test(value)).length;
+  if (groups < 3) return 'Use pelo menos três grupos: maiúsculas, minúsculas, números e símbolos.';
+  return '';
+}
+
+function usuarioDaReq(req) {
+  const payload = verificarToken(tokenDaReq(req));
   if (!payload) return null;
-  return mapUsuario(get('SELECT * FROM usuarios WHERE id = ? AND status = ?', [payload.id, 'ativo']));
+  const row = get('SELECT * FROM usuarios WHERE id = ? AND status = ?', [payload.id, 'ativo']);
+  if (!row || Number(payload.sv || 1) !== Number(row.sessao_versao || 1)) return null;
+  const usuario = mapUsuario(row);
+  usuario.sessaoExpiraEm = payload.exp * 1000;
+  return usuario;
 }
 
 function exigir(req, res, perfis = []) {
@@ -100,6 +190,7 @@ function mapUsuario(row) {
     avatarUrl: row.avatar_url || '',
     ultimoAcesso: row.ultimo_acesso,
     criadoEm: row.criado_em,
+    deveTrocarSenha: Boolean(row.deve_trocar_senha),
   };
 }
 
@@ -289,12 +380,12 @@ function servirArquivo(req, res) {
   if (!filePath.startsWith(publicDir)) return erro(res, 403, 'FORBIDDEN', 'Acesso negado.');
   if (!fs.existsSync(filePath)) {
     const index = path.join(publicDir, 'index.html');
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', ...securityHeaders() });
     return res.end(fs.readFileSync(index));
   }
   const ext = path.extname(filePath);
   const types = { '.html': 'text/html', '.css': 'text/css', '.js': 'application/javascript' };
-  res.writeHead(200, { 'Content-Type': `${types[ext] || 'application/octet-stream'}; charset=utf-8` });
+  res.writeHead(200, { 'Content-Type': `${types[ext] || 'application/octet-stream'}; charset=utf-8`, 'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=3600', ...securityHeaders() });
   res.end(fs.readFileSync(filePath));
 }
 
@@ -304,18 +395,7 @@ async function api(req, res) {
   const method = req.method;
 
   if (method === 'GET' && pathName === '/api/lock/users') {
-    const usuarios = all(`
-      SELECT * FROM usuarios
-      WHERE status = 'ativo'
-      ORDER BY CASE perfil
-        WHEN 'administrador' THEN 1
-        WHEN 'supervisor' THEN 2
-        WHEN 'producao' THEN 3
-        WHEN 'qualidade' THEN 4
-        ELSE 5
-      END, nome_exibicao, nome
-    `).map(mapUsuario);
-    return json(res, 200, { data: usuarios });
+    return erro(res, 404, 'NOT_FOUND', 'Rota não encontrada.');
   }
 
   if (method === 'GET' && pathName === '/api/configuracoes/bloqueio') {
@@ -324,45 +404,66 @@ async function api(req, res) {
   }
 
   if (method === 'POST' && pathName === '/api/lock/auth') {
-    const body = await lerBody(req);
-    const row = get('SELECT * FROM usuarios WHERE id = ? AND status = ?', [Number(body.usuarioId), 'ativo']);
-    const usuario = mapUsuario(row);
-    if (!row || !usuario) {
-      registrarAcesso(null, body.metodo || 'desconhecido', 'falha', dispositivo(req), 'Usuario nao encontrado.');
-      return erro(res, 401, 'INVALID_LOGIN', 'Usuário não encontrado ou inativo.');
-    }
-
-    const metodo = 'senha';
-    const ok = verificarSenha(body.pin || body.senha || '', row.senha_hash);
-
-    registrarAcesso(usuario, metodo, ok ? 'sucesso' : 'falha', dispositivo(req), ok ? 'Acesso liberado.' : 'Falha de autenticação.');
-    if (!ok) return erro(res, 401, 'INVALID_LOGIN', 'Senha inválida.');
-
-    return json(res, 200, {
-      token: assinar({ id: usuario.id, perfil: usuario.perfil }),
-      usuario,
-    });
+    return erro(res, 404, 'NOT_FOUND', 'Rota não encontrada.');
   }
 
   if (method === 'POST' && pathName === '/api/login') {
     const body = await lerBody(req);
-    const usuario = get('SELECT * FROM usuarios WHERE email = ? AND status = ?', [texto(body, 'email'), 'ativo']);
-    if (!usuario || !verificarSenha(body.senha, usuario.senha_hash)) {
+    const email = texto(body, 'email').toLowerCase();
+    const retryAfter = bloqueioLogin(req, email);
+    if (retryAfter) return erro(res, 429, 'LOGIN_BLOCKED', `Muitas tentativas. Aguarde ${Math.ceil(retryAfter / 60)} minuto(s).`, [], { 'Retry-After': retryAfter });
+    const usuario = get('SELECT * FROM usuarios WHERE lower(email) = ? AND status = ?', [email, 'ativo']);
+    const senhaCorreta = verificarSenha(body.senha, usuario?.senha_hash || dummyPasswordHash);
+    if (!usuario || !senhaCorreta) {
+      registrarFalhaLogin(req, email);
       registrarAcesso(usuario ? mapUsuario(usuario) : null, 'senha', 'falha', dispositivo(req), 'Login por e-mail falhou.');
+      const bloqueadoAgora = bloqueioLogin(req, email);
+      if (bloqueadoAgora) return json(res, 429, { error: { code: 'LOGIN_BLOCKED', message: 'Muitas tentativas. Aguarde 15 minutos.', details: [] } }, { 'Retry-After': bloqueadoAgora });
       return erro(res, 401, 'INVALID_LOGIN', 'E-mail ou senha inválidos.');
     }
+    limparFalhasLogin(req, email);
     const mapped = mapUsuario(usuario);
     registrarAcesso(mapped, 'senha', 'sucesso', dispositivo(req), 'Login por e-mail.');
+    const sessao = emitirSessao(usuario);
     return json(res, 200, {
-      token: assinar({ id: usuario.id, perfil: usuario.perfil }),
       usuario: mapped,
-    });
+      sessaoExpiraEm: sessao.expiresAt,
+    }, { 'Set-Cookie': cookieSessao(sessao.token) });
+  }
+
+  if (method === 'POST' && pathName === '/api/logout') {
+    return json(res, 200, { status: 'encerrada' }, { 'Set-Cookie': cookieSessao('', 0) });
   }
 
   const usuario = exigir(req, res);
   if (!usuario) return;
 
-  if (method === 'GET' && pathName === '/api/me') return json(res, 200, { usuario });
+  if (method === 'GET' && pathName === '/api/me') {
+    return json(res, 200, { usuario, sessaoExpiraEm: usuario.sessaoExpiraEm });
+  }
+
+  if (method === 'POST' && pathName === '/api/change-password') {
+    const body = await lerBody(req);
+    const row = get('SELECT * FROM usuarios WHERE id = ? AND status = ?', [usuario.id, 'ativo']);
+    if (!row || !verificarSenha(body.senhaAtual, row.senha_hash)) {
+      return erro(res, 401, 'INVALID_PASSWORD', 'A senha atual está incorreta.');
+    }
+    const passwordError = validarNovaSenha(body.novaSenha);
+    if (passwordError) return erro(res, 422, 'WEAK_PASSWORD', passwordError);
+    if (verificarSenha(body.novaSenha, row.senha_hash)) {
+      return erro(res, 422, 'PASSWORD_REUSE', 'A nova senha deve ser diferente da senha atual.');
+    }
+    run('UPDATE usuarios SET senha_hash=?, deve_trocar_senha=0, sessao_versao=sessao_versao+1 WHERE id=?', [hashSenha(body.novaSenha), usuario.id]);
+    const updated = get('SELECT * FROM usuarios WHERE id = ?', [usuario.id]);
+    const mapped = mapUsuario(updated);
+    const sessao = emitirSessao(updated);
+    auditar(mapped, 'usuarios', usuario.id, 'alterou_senha', null, { senha: '[protegida]' });
+    return json(res, 200, { usuario: mapped, sessaoExpiraEm: sessao.expiresAt }, { 'Set-Cookie': cookieSessao(sessao.token) });
+  }
+
+  if (usuario.deveTrocarSenha) {
+    return erro(res, 403, 'PASSWORD_CHANGE_REQUIRED', 'Troque sua senha inicial para continuar.');
+  }
 
   if (pathName === '/api/controle-densidade') {
     if (method === 'GET') return json(res, 200, carregarControle());
@@ -384,9 +485,11 @@ async function api(req, res) {
     if (method === 'POST') {
       const body = await lerBody(req);
       const u = usuarioPayload(body);
+      const passwordError = validarNovaSenha(u.senha);
+      if (passwordError) return erro(res, 422, 'WEAK_PASSWORD', passwordError);
       const info = run(`
-        INSERT INTO usuarios (nome,nome_exibicao,matricula,setor,cargo,email,perfil,senha_hash,status,avatar_url)
-        VALUES (?,?,?,?,?,?,?,?,?,?)
+        INSERT INTO usuarios (nome,nome_exibicao,matricula,setor,cargo,email,perfil,senha_hash,status,avatar_url,deve_trocar_senha)
+        VALUES (?,?,?,?,?,?,?,?,?,?,1)
       `, [
         u.nome, u.nomeExibicao, u.matricula, u.setor, u.cargo, u.email, u.perfil, hashSenha(u.senha), u.status, u.avatarUrl,
       ]);
@@ -649,15 +752,20 @@ migrate();
 
 const server = http.createServer(async (req, res) => {
   try {
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.headers.origin) {
+      const origin = new URL(req.headers.origin);
+      if (origin.host !== req.headers.host) return erro(res, 403, 'INVALID_ORIGIN', 'Origem da requisição não permitida.');
+    }
     if (req.url.startsWith('/api/')) return await api(req, res);
     return servirArquivo(req, res);
   } catch (err) {
-    return erro(res, err.message === 'JSON inválido.' ? 400 : 500, 'SERVER_ERROR', err.message);
+    const status = err.status || (err.message === 'JSON inválido.' ? 400 : 500);
+    return erro(res, status, err.code || (status >= 500 ? 'SERVER_ERROR' : 'INVALID_REQUEST'), status >= 500 ? 'Não foi possível concluir a operação.' : err.message);
   }
 });
 
-server.listen(config.port, () => {
-  console.log(`Sistema de cartas de peso em http://localhost:${config.port}`);
+server.listen(config.port, config.host, () => {
+  console.log(`Sistema de cartas de peso em http://${config.host}:${config.port}`);
 });
 
 function shutdown() {

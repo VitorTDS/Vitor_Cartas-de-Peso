@@ -1,16 +1,16 @@
 const app = document.querySelector('#app');
 
 const state = {
-  token: localStorage.getItem('token'),
-  usuario: JSON.parse(localStorage.getItem('usuario') || 'null'),
+  usuario: null,
   usuarios: [],
-  selectedUserId: Number(localStorage.getItem('selectedUserId') || 0),
   tab: localStorage.getItem('tab') || 'cartas',
   lockStatus: 'Identifique-se para acessar o controle.',
   controle: null,
   saving: false,
   toast: '',
   saveTimer: null,
+  sessionTimer: null,
+  sessionExpiresAt: 0,
 };
 
 const perfilLabel = {
@@ -49,9 +49,9 @@ const fmt = (value, digits = 2) => Number(value || 0).toLocaleString('pt-BR', {
 async function api(path, options = {}) {
   const res = await fetch(path, {
     ...options,
+    credentials: 'same-origin',
     headers: {
       'Content-Type': 'application/json',
-      ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}),
       ...(options.headers || {}),
     },
   });
@@ -60,8 +60,9 @@ async function api(path, options = {}) {
     const error = new Error(body.error?.message || 'Nao foi possivel concluir a operacao.');
     error.status = res.status;
     error.code = body.error?.code;
-    if (res.status === 401 && state.token) {
+    if (res.status === 401 && state.usuario && path !== '/api/change-password') {
       limparSessao('Sua sessao expirou. Entre novamente.');
+      render();
     }
     throw error;
   }
@@ -77,13 +78,10 @@ function setToast(message) {
   }, 2600);
 }
 
-async function carregarLock() {
-  const body = await api('/api/lock/users');
+async function carregarUsuarios() {
+  if (state.usuario?.perfil !== 'administrador') return;
+  const body = await api('/api/usuarios');
   state.usuarios = body.data || [];
-  if (!state.selectedUserId && state.usuarios[0]) {
-    state.selectedUserId = state.usuarios[0].id;
-    localStorage.setItem('selectedUserId', String(state.selectedUserId));
-  }
 }
 
 async function carregarControle() {
@@ -97,27 +95,32 @@ function avatar(usuario) {
 }
 
 function lockView() {
-  const selected = state.usuarios.find((user) => user.id === state.selectedUserId) || state.usuarios[0];
   app.innerHTML = `
     <section class="lock-screen">
       <aside class="lock-users">
         <div class="brand"><span class="mark">D</span><div><h1>Controle de Densidade</h1><small>Volume pela densidade</small></div></div>
-        <div class="lock-list">
-          ${state.usuarios.map((user) => `
-            <button class="lock-user ${selected?.id === user.id ? 'active' : ''}" type="button" data-user="${user.id}">
-              ${avatar(user)}
-              <span><strong>${h(user.nomeExibicao || user.nome)}</strong><small>${h(perfilLabel[user.perfil] || user.perfil)}</small></span>
-            </button>
-          `).join('')}
+        <div class="login-info">
+          <span class="eyebrow">Acesso protegido</span>
+          <h2>Controle confiável do início ao fim.</h2>
+          <p>Sua sessão permanece ativa por 50 minutos. Depois desse período, o sistema entra em suspensão automaticamente.</p>
+          <ul>
+            <li>Dados protegidos por perfil de acesso</li>
+            <li>Alterações registradas em auditoria</li>
+            <li>Sessão encerrada automaticamente</li>
+          </ul>
         </div>
       </aside>
       <main class="lock-main">
         <form id="lockForm" class="login-card">
-          <h2>${selected ? h(selected.nome) : 'Nenhum usuario ativo'}</h2>
-          <input type="hidden" name="usuarioId" value="${selected?.id || ''}">
+          <span class="eyebrow">Bem-vindo</span>
+          <h2>Entre no sistema</h2>
+          <p>Use seu e-mail corporativo e sua senha.</p>
           <div class="login-status">${h(state.lockStatus)}</div>
+          <label>E-mail
+            <input name="email" type="email" autocomplete="username" required autofocus>
+          </label>
           <label>Senha
-            <input name="pin" type="password" autocomplete="current-password" required autofocus>
+            <input name="senha" type="password" autocomplete="current-password" required>
           </label>
           <div class="actions">
             <button type="submit">Entrar</button>
@@ -126,30 +129,23 @@ function lockView() {
       </main>
     </section>
   `;
-  document.querySelectorAll('[data-user]').forEach((button) => {
-    button.addEventListener('click', () => {
-      state.selectedUserId = Number(button.dataset.user);
-      localStorage.setItem('selectedUserId', String(state.selectedUserId));
-      state.lockStatus = 'Digite sua senha para entrar.';
-      render();
-    });
-  });
-  document.querySelector('#lockForm')?.addEventListener('submit', authPin);
+  document.querySelector('#lockForm')?.addEventListener('submit', autenticar);
 }
 
-async function authPin(event) {
+async function autenticar(event) {
   event.preventDefault();
   try {
     const payload = Object.fromEntries(new FormData(event.currentTarget));
-    const body = await api('/api/lock/auth', {
+    const body = await api('/api/login', {
       method: 'POST',
-      body: JSON.stringify({ ...payload, metodo: 'pin' }),
+      body: JSON.stringify(payload),
     });
-    state.token = body.token;
     state.usuario = body.usuario;
-    localStorage.setItem('token', body.token);
-    localStorage.setItem('usuario', JSON.stringify(body.usuario));
-    await carregarControle();
+    agendarSuspensao(body.sessaoExpiraEm);
+    if (!state.usuario.deveTrocarSenha) {
+      await carregarControle();
+      await carregarUsuarios();
+    }
     render();
   } catch (err) {
     state.lockStatus = err.message;
@@ -167,7 +163,7 @@ async function cadastrarUsuario(event) {
       method: 'POST',
       body: JSON.stringify(Object.fromEntries(new FormData(form))),
     });
-    await carregarLock();
+    await carregarUsuarios();
     setToast('Usuario cadastrado.');
   } catch (err) {
     setToast(err.message);
@@ -180,15 +176,98 @@ async function cadastrarUsuario(event) {
 function limparSessao(message) {
   localStorage.removeItem('token');
   localStorage.removeItem('usuario');
-  state.token = null;
+  sessionStorage.removeItem('sessionExpiresAt');
+  clearTimeout(state.sessionTimer);
+  state.sessionTimer = null;
+  state.sessionExpiresAt = 0;
   state.usuario = null;
+  state.usuarios = [];
   state.controle = null;
   state.lockStatus = message;
 }
 
-function sair() {
-  limparSessao('Sessao encerrada.');
-  carregarLock().finally(render);
+async function sair() {
+  try {
+    await api('/api/logout', { method: 'POST', body: '{}' });
+  } finally {
+    limparSessao('Sessão encerrada.');
+    render();
+  }
+}
+
+function agendarSuspensao(expiresAt) {
+  clearTimeout(state.sessionTimer);
+  state.sessionExpiresAt = Number(expiresAt || 0);
+  sessionStorage.setItem('sessionExpiresAt', String(state.sessionExpiresAt));
+  const restante = Math.max(0, state.sessionExpiresAt - Date.now());
+  state.sessionTimer = setTimeout(() => suspenderSessao(), restante);
+}
+
+async function suspenderSessao() {
+  if (!state.usuario) return;
+  if (state.saveTimer) {
+    clearTimeout(state.saveTimer);
+    state.saveTimer = null;
+    try { await salvarAgora(); } catch { /* a sessão pode vencer durante o último salvamento */ }
+  }
+  try {
+    await fetch('/api/logout', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  } finally {
+    limparSessao('Sistema suspenso após 50 minutos. Entre novamente para continuar.');
+    render();
+  }
+}
+
+function passwordChangeView() {
+  app.innerHTML = `
+    <section class="lock-screen password-change-screen">
+      <aside class="lock-users">
+        <div class="brand"><span class="mark">D</span><div><h1>Controle de Densidade</h1><small>Proteção da conta</small></div></div>
+        <div class="login-info">
+          <span class="eyebrow">Primeiro acesso</span>
+          <h2>Crie uma senha somente sua.</h2>
+          <p>A nova senha deve ter pelo menos 10 caracteres e combinar três destes grupos:</p>
+          <ul><li>Letras maiúsculas</li><li>Letras minúsculas</li><li>Números</li><li>Símbolos</li></ul>
+        </div>
+      </aside>
+      <main class="lock-main">
+        <form id="passwordChangeForm" class="login-card">
+          <span class="eyebrow">Segurança obrigatória</span>
+          <h2>Troque sua senha inicial</h2>
+          <div class="login-status">${h(state.lockStatus)}</div>
+          <label>Senha atual<input name="senhaAtual" type="password" autocomplete="current-password" required></label>
+          <label>Nova senha<input name="novaSenha" type="password" autocomplete="new-password" minlength="10" required></label>
+          <label>Confirmar nova senha<input name="confirmacao" type="password" autocomplete="new-password" minlength="10" required></label>
+          <div class="actions"><button type="submit">Salvar nova senha</button></div>
+        </form>
+      </main>
+    </section>
+  `;
+  document.querySelector('#passwordChangeForm')?.addEventListener('submit', trocarSenhaInicial);
+}
+
+async function trocarSenhaInicial(event) {
+  event.preventDefault();
+  const payload = Object.fromEntries(new FormData(event.currentTarget));
+  if (payload.novaSenha !== payload.confirmacao) {
+    state.lockStatus = 'A confirmação não corresponde à nova senha.';
+    return render();
+  }
+  try {
+    const body = await api('/api/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ senhaAtual: payload.senhaAtual, novaSenha: payload.novaSenha }),
+    });
+    state.usuario = body.usuario;
+    state.lockStatus = 'Senha atualizada com sucesso.';
+    agendarSuspensao(body.sessaoExpiraEm);
+    await carregarControle();
+    await carregarUsuarios();
+    render();
+  } catch (err) {
+    state.lockStatus = err.message;
+    render();
+  }
 }
 
 function setTab(tab) {
@@ -353,20 +432,35 @@ controleView = function controleViewSidebar() {
           <span class="mark">D</span>
           <div>
             <h1>Controle de Densidade</h1>
-            <small>Volume pela densidade</small>
+            <small>Sobral · Qualidade industrial</small>
           </div>
         </div>
         <div class="internal-user">
-          <strong>${h(state.usuario?.nomeExibicao || state.usuario?.nome)}</strong>
-          <span id="saveStatus">Dados carregados</span>
+          ${avatar(state.usuario)}
+          <div>
+            <strong>${h(state.usuario?.nomeExibicao || state.usuario?.nome)}</strong>
+            <span>${h(perfilLabel[state.usuario?.perfil] || state.usuario?.perfil)}</span>
+          </div>
         </div>
         <nav class="internal-tabs" aria-label="Acoes internas">
-          <button type="button" class="${tab === 'cartas' ? 'active' : ''}" data-tab="cartas">Cartas</button>
-          ${admin ? `<button type="button" class="${tab === 'usuarios' ? 'active' : ''}" data-tab="usuarios">Usuários</button>` : ''}
+          <span class="nav-label">Menu principal</span>
+          <button type="button" class="${tab === 'cartas' ? 'active' : ''}" data-tab="cartas"><span aria-hidden="true">▦</span> Cartas de peso</button>
+          ${admin ? `<button type="button" class="${tab === 'usuarios' ? 'active' : ''}" data-tab="usuarios"><span aria-hidden="true">♙</span> Usuários</button>` : ''}
         </nav>
-        <button class="secondary" id="logoutBtn" type="button">Sair</button>
+        <div class="sidebar-footer">
+          <span class="save-indicator"><i aria-hidden="true"></i><span id="saveStatus">Dados carregados</span></span>
+          <button class="secondary" id="logoutBtn" type="button">Sair do sistema</button>
+        </div>
       </aside>
       <main class="internal-main">
+        <header class="workspace-header">
+          <div>
+            <span class="eyebrow">Controle de processo</span>
+            <h1>${tab === 'cartas' ? 'Cartas de peso' : 'Gestão de usuários'}</h1>
+            <p>${tab === 'cartas' ? `Acompanhamento de volume por densidade a cada ${fmt(state.controle.cabecalho.frequenciaMinutos, 0)} minutos.` : 'Cadastre e gerencie os acessos da equipe.'}</p>
+          </div>
+          <div class="workspace-date">${new Intl.DateTimeFormat('pt-BR', { dateStyle: 'long' }).format(new Date())}</div>
+        </header>
         ${state.toast ? `<div class="toast">${h(state.toast)}</div>` : ''}
         ${tab === 'cartas' ? cartasTab() : usuariosTab()}
       </main>
@@ -382,22 +476,16 @@ function cartasTab() {
   return `
     <section class="module">
       <div class="section-title">
-        <h2>Cartas de peso</h2>
-        <div class="actions">
-          <button class="secondary" id="csvBtn" type="button">Exportar CSV</button>
-          <button class="secondary" id="excelBtn" type="button">Exportar Excel</button>
-          <button id="addColumnBtn" type="button">Adicionar verificacao</button>
+        <div>
+          <span class="eyebrow">Parâmetros da carta</span>
+          <h2>Dados do processo</h2>
+          <p class="section-description">Informe os dados do lote e os limites usados nos cálculos.</p>
         </div>
-      </div>
-      <div class="card-shortcuts">
-        <button class="card-shortcut active" type="button" data-card-shortcut="tipo1">
-          <strong>Tipo de carta 1</strong>
-          <span>Aguardando especificacao</span>
-        </button>
-        <button class="card-shortcut" type="button" data-card-shortcut="tipo2">
-          <strong>Tipo de carta 2</strong>
-          <span>Aguardando especificacao</span>
-        </button>
+        <div class="actions">
+          <button class="secondary" id="csvBtn" type="button">Baixar CSV</button>
+          <button class="secondary" id="excelBtn" type="button">Baixar Excel</button>
+          <button id="addColumnBtn" type="button">+ Nova verificação</button>
+        </div>
       </div>
       <div class="header-grid">
         ${field('Produto', 'produto')}
@@ -406,20 +494,24 @@ function cartasTab() {
         ${field('Variacao permitida (%)', 'variacaoPermitidaPercentual', 'number', '0.01')}
         ${field('Densidade (g/mL)', 'densidadeDeclarada', 'number', '0.0001')}
         ${field('Peso Emb. Primaria (g)', 'pesoEmbalagemPrimariaG', 'number', '0.01')}
-        ${field('Minimo (mL) — automatico', 'minimoMl', 'number', '0.01', true)}
-        ${field('Maximo (mL) — automatico', 'maximoMl', 'number', '0.01', true)}
+        ${field('Mínimo (mL) — automático', 'minimoMl', 'number', '0.01', true)}
+        ${field('Máximo (mL) — automático', 'maximoMl', 'number', '0.01', true)}
         ${field('Maquina (TAG)', 'maquinaTag')}
         ${field('Linha', 'linha')}
         ${field('TAG Balanca', 'tagBalanca')}
         ${field('Frequencia (min)', 'frequenciaMinutos', 'number', '1')}
         ${field('Tolerancia (min)', 'toleranciaMinutos', 'number', '1')}
       </div>
-      <p class="legend">Se os valores de media e densidade estiverem diferentes, ficarao vermelhos e deverao ser reavaliados.</p>
+      <p class="legend"><strong>Atenção aos limites:</strong> valores fora da faixa permitida serão destacados em vermelho para reavaliação.</p>
     </section>
     <section class="module">
       <div class="section-title">
-        <h2>Tabela de pesagens</h2>
-        <span class="hint">${state.controle.verificacoes.length} verificacao(oes)</span>
+        <div>
+          <span class="eyebrow">Monitoramento</span>
+          <h2>Registro de pesagens</h2>
+          <p class="section-description">Preencha os pesos; os volumes são calculados automaticamente.</p>
+        </div>
+        <span class="count-badge">${state.controle.verificacoes.length} ${state.controle.verificacoes.length === 1 ? 'verificação' : 'verificações'}</span>
       </div>
       <div id="densityTable"></div>
     </section>
@@ -435,8 +527,9 @@ function painelUsuarios() {
     <section class="module">
       <div class="section-title">
         <div>
-          <h2>Usuarios</h2>
-          <span class="hint">Cadastre os usuarios que podem acessar o sistema com senha.</span>
+          <span class="eyebrow">Controle de acesso</span>
+          <h2>Novo usuário</h2>
+          <p class="section-description">Cadastre as pessoas que podem acessar o sistema.</p>
         </div>
       </div>
       <form id="usuarioForm" class="user-form">
@@ -462,10 +555,10 @@ function painelUsuarios() {
               <option value="inativo">Inativo</option>
             </select>
           </label>
-          <label>Senha inicial<input name="senha" type="password" required></label>
+          <label>Senha inicial<input name="senha" type="password" minlength="10" required></label>
         </div>
         <div class="actions">
-          <button type="submit">Cadastrar usuario</button>
+          <button type="submit">Cadastrar usuário</button>
         </div>
       </form>
       <hr>
@@ -499,7 +592,7 @@ function renderTabela() {
         <thead>
           <tr>
             <th class="row-head">Campo</th>
-            ${cols.map((_, index) => `<th>Verificacao ${index + 1}<button class="icon-btn" title="Remover verificacao" type="button" data-remove="${index}">x</button></th>`).join('')}
+            ${cols.map((_, index) => `<th>Verificação ${index + 1}<button class="icon-btn" title="Remover verificação" aria-label="Remover verificação ${index + 1}" type="button" data-remove="${index}">×</button></th>`).join('')}
           </tr>
         </thead>
         <tbody>
@@ -508,8 +601,8 @@ function renderTabela() {
           ${linhaMeta('Hora', 'hora', 'time')}
           ${Array.from({ length: 10 }, (_, index) => linhaPeso(index)).join('')}
           ${Array.from({ length: 10 }, (_, index) => linhaVolume(index)).join('')}
-          ${linhaCalculada('Peso medio', (calc) => calc.media ? `${fmt(calc.media, 2)} g` : '—')}
-          ${linhaCalculada('MEDIA (mL)', (calc) => calc.volume ? `${fmt(calc.volume, 2)} mL${calc.completa ? '' : ' (parcial)'}` : '—', 'volumeFora')}
+          ${linhaCalculada('Peso médio', (calc) => calc.media ? `${fmt(calc.media, 2)} g` : '—')}
+          ${linhaCalculada('Média (mL)', (calc) => calc.volume ? `${fmt(calc.volume, 2)} mL${calc.completa ? '' : ' (parcial)'}` : '—', 'volumeFora')}
         </tbody>
       </table>
     </div>
@@ -566,8 +659,8 @@ function linhaCalculada(label, formatter, flag = '') {
 
 function renderCalculos() {
   const labels = {
-    'Peso medio': (calc) => calc.media ? `${fmt(calc.media, 2)} g` : '—',
-    'MEDIA (mL)': (calc) => calc.volume ? `${fmt(calc.volume, 2)} mL${calc.completa ? '' : ' (parcial)'}` : '—',
+    'Peso médio': (calc) => calc.media ? `${fmt(calc.media, 2)} g` : '—',
+    'Média (mL)': (calc) => calc.volume ? `${fmt(calc.volume, 2)} mL${calc.completa ? '' : ' (parcial)'}` : '—',
   };
   document.querySelectorAll('[data-calc-label]').forEach((cell, index) => {
     const col = index % Math.max(1, state.controle.verificacoes.length);
@@ -613,24 +706,25 @@ function linhasExportacao() {
     ['Produto', cab.produto],
     ['Lote', cab.lote],
     ['Volume declarado (mL)', cab.volumeDeclaradoMl],
-    ['Variacao permitida (%)', cab.variacaoPermitidaPercentual],
+    ['Variação permitida (%)', cab.variacaoPermitidaPercentual],
     ['Densidade (g/mL)', cab.densidadeDeclarada],
-    ['Peso Emb. Primaria (g)', cab.pesoEmbalagemPrimariaG],
-    ['Minimo (mL)', cab.minimoMl],
-    ['Maximo (mL)', cab.maximoMl],
-    ['Maquina (TAG)', cab.maquinaTag],
+    ['Peso Emb. Primária (g)', cab.pesoEmbalagemPrimariaG],
+    ['Mínimo (mL)', cab.minimoMl],
+    ['Máximo (mL)', cab.maximoMl],
+    ['Máquina (TAG)', cab.maquinaTag],
     ['Linha', cab.linha],
-    ['TAG Balanca', cab.tagBalanca],
-    ['Frequencia', `a cada ${cab.frequenciaMinutos} minutos, tolerancia de ${cab.toleranciaMinutos} minutos`],
+    ['TAG Balança', cab.tagBalanca],
+    ['Frequência', `a cada ${cab.frequenciaMinutos} minutos, tolerância de ${cab.toleranciaMinutos} minutos`],
     [],
-    ['Campo', ...cols.map((_, index) => `Verificacao ${index + 1}`)],
+    ['Campo', ...cols.map((_, index) => `Verificação ${index + 1}`)],
     ['Realizado por', ...cols.map((col) => col.realizadoPor)],
     ['Data', ...cols.map((col) => col.data)],
     ['Hora', ...cols.map((col) => col.hora)],
-    ...Array.from({ length: 10 }, (_, index) => [`${index + 1}o peso (g)`, ...cols.map((col) => col.pesos[index] || '')]),
-    ['Media', ...cols.map((col) => fmt(calculos(col).media, 2))],
-    ['Densidade', ...cols.map((col) => fmt(calculos(col).densidade, 4))],
-    ['MEDIA (mL)', ...cols.map((col) => fmt(calculos(col).volume, 2))],
+    ...Array.from({ length: 10 }, (_, index) => [`${index + 1}º peso (g)`, ...cols.map((col) => col.pesos[index] || '')]),
+    ...Array.from({ length: 10 }, (_, index) => [`${index + 1}º volume (mL)`, ...cols.map((col) => calculos(col).volumes[index] || '')]),
+    ['Peso médio (g)', ...cols.map((col) => calculos(col).media || '')],
+    ['Média de volume (mL)', ...cols.map((col) => calculos(col).volume || '')],
+    ['Situação', ...cols.map((col) => calculos(col).volumeFora ? 'Fora da faixa' : 'Conforme')],
   ];
   return rows;
 }
@@ -647,30 +741,143 @@ function baixar(nome, conteudo, tipo) {
 
 function exportarCsv() {
   const csv = linhasExportacao().map((row) => row.map((cell) => `"${String(cell ?? '').replaceAll('"', '""')}"`).join(';')).join('\n');
-  baixar('controle-densidade.csv', csv, 'text/csv;charset=utf-8');
+  baixar(nomeArquivoExportacao('csv'), `\ufeff${csv}`, 'text/csv;charset=utf-8');
+}
+
+function nomeArquivoExportacao(extensao) {
+  const lote = String(state.controle.cabecalho.lote || 'sem-lote')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase();
+  return `controle-densidade_${lote || 'sem-lote'}_${hoje()}.${extensao}`;
 }
 
 function exportarExcel() {
-  const html = `<html><head><meta charset="utf-8"></head><body><table>${linhasExportacao().map((row) => (
-    `<tr>${row.map((cell) => `<td>${h(cell)}</td>`).join('')}</tr>`
-  )).join('')}</table></body></html>`;
-  baixar('controle-densidade.xls', html, 'application/vnd.ms-excel;charset=utf-8');
+  const cab = state.controle.cabecalho;
+  const cols = state.controle.verificacoes;
+  const calculados = cols.map(calculos);
+  const totalColunas = Math.max(cols.length + 1, 4);
+  const texto = (value, classe = '') => `<td class="text ${classe}">${h(value)}</td>`;
+  const numero = (value, casas = 2, classe = '') => {
+    if (value === '' || value === null || value === undefined) return `<td class="number n${casas} ${classe}"></td>`;
+    const parsed = parseNumero(value);
+    return `<td class="number n${casas} ${classe}">${parsed}</td>`;
+  };
+  const parametros = [
+    ['Produto', cab.produto, 'Lote', cab.lote],
+    ['Volume declarado (mL)', cab.volumeDeclaradoMl, 'Variação permitida (%)', cab.variacaoPermitidaPercentual],
+    ['Densidade (g/mL)', cab.densidadeDeclarada, 'Peso Emb. Primária (g)', cab.pesoEmbalagemPrimariaG],
+    ['Mínimo (mL)', cab.minimoMl, 'Máximo (mL)', cab.maximoMl],
+    ['Máquina (TAG)', cab.maquinaTag, 'Linha', cab.linha],
+    ['TAG Balança', cab.tagBalanca, 'Frequência', `${cab.frequenciaMinutos} min (+/- ${cab.toleranciaMinutos} min)`],
+  ];
+  const linhasParametros = parametros.map(([labelA, valueA, labelB, valueB]) => `
+    <tr>${texto(labelA, 'label')}${texto(valueA, 'value')}${texto(labelB, 'label')}${texto(valueB, 'value')}</tr>
+  `).join('');
+  const cabecalhoVerificacoes = `<tr><th class="row-label">Campo</th>${cols.map((_, index) => `<th>Verificação ${index + 1}</th>`).join('')}</tr>`;
+  const linhaTexto = (label, values, classe = '') => `<tr>${texto(label, 'row-label')}${values.map((value) => texto(value, classe)).join('')}</tr>`;
+  const linhaNumero = (label, values, casas, classes = []) => `<tr>${texto(label, 'row-label')}${values.map((value, index) => numero(value, casas, classes[index] || '')).join('')}</tr>`;
+  const pesos = Array.from({ length: 10 }, (_, index) => linhaNumero(
+    `${index + 1}º peso (g)`,
+    cols.map((col) => col.pesos[index] || ''),
+    2,
+  )).join('');
+  const volumes = Array.from({ length: 10 }, (_, index) => linhaNumero(
+    `${index + 1}º volume (mL)`,
+    calculados.map((calc) => calc.volumes[index] || ''),
+    2,
+    calculados.map((calc) => {
+      const volume = calc.volumes[index];
+      return volume && (volume < parseNumero(cab.minimoMl) || volume > parseNumero(cab.maximoMl)) ? 'alert' : '';
+    }),
+  )).join('');
+  const resumo = [
+    linhaNumero('Peso médio (g)', calculados.map((calc) => calc.media || ''), 2),
+    linhaNumero('Média de volume (mL)', calculados.map((calc) => calc.volume || ''), 2, calculados.map((calc) => calc.volumeFora ? 'alert' : 'ok')),
+    `<tr>${texto('Situação', 'row-label')}${calculados.map((calc) => texto(calc.volumeFora ? 'Fora da faixa' : 'Conforme', `status ${calc.volumeFora ? 'alert' : 'ok'}`)).join('')}</tr>`,
+  ].join('');
+  const larguras = `<col style="width:190px">${cols.map(() => '<col style="width:125px">').join('')}`;
+  const html = `<!doctype html>
+  <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+    <head>
+      <meta charset="utf-8">
+      <!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Controle de Densidade</x:Name><x:WorksheetOptions><x:Selected/><x:FreezePanes/><x:FrozenNoSplit/><x:SplitHorizontal>1</x:SplitHorizontal><x:TopRowBottomPane>1</x:TopRowBottomPane></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->
+      <style>
+        body { font-family: Calibri, Arial, sans-serif; color: #172033; }
+        table { border-collapse: collapse; margin-bottom: 18px; }
+        td, th { padding: 7px 9px; border: 1px solid #d9e0e8; vertical-align: middle; }
+        .title { padding: 14px; background: #c2410c; color: #fff; font-size: 18pt; font-weight: 700; text-align: left; }
+        .subtitle { padding: 7px 14px; background: #fff7ed; color: #9a3412; font-size: 10pt; text-align: left; }
+        .section { padding: 8px 10px; background: #172033; color: #fff; font-size: 11pt; font-weight: 700; text-align: left; }
+        .label, .row-label { background: #f1f5f9; color: #344054; font-weight: 700; text-align: left; }
+        .value { background: #fff; }
+        th { background: #ea580c; color: #fff; font-weight: 700; text-align: center; }
+        .text { mso-number-format: "\\@"; }
+        .number { text-align: right; }
+        .n2 { mso-number-format: "0.00"; }
+        .n4 { mso-number-format: "0.0000"; }
+        .alert { background: #fee4e2; color: #b42318; font-weight: 700; }
+        .ok { background: #ecfdf3; color: #067647; font-weight: 700; }
+        .status { text-align: center; font-weight: 700; }
+        .footer { color: #667085; font-size: 9pt; border: 0; padding-top: 12px; }
+      </style>
+    </head>
+    <body>
+      <table>
+        <tr><td class="title" colspan="${totalColunas}">Controle de Densidade — Volume pela Densidade</td></tr>
+        <tr><td class="subtitle" colspan="${totalColunas}">Relatório de controle do processo · Sobral</td></tr>
+      </table>
+      <table>
+        <tr><td class="section" colspan="4">Identificação do processo</td></tr>
+        ${linhasParametros}
+      </table>
+      <table>
+        ${larguras}
+        <tr><td class="section" colspan="${Math.max(cols.length + 1, 1)}">Verificações realizadas</td></tr>
+        ${cabecalhoVerificacoes}
+        ${linhaTexto('Realizado por', cols.map((col) => col.realizadoPor))}
+        ${linhaTexto('Data', cols.map((col) => col.data))}
+        ${linhaTexto('Hora', cols.map((col) => col.hora))}
+        ${pesos}
+        ${volumes}
+        ${resumo}
+      </table>
+      <table><tr><td class="footer">Exportado em ${h(new Date().toLocaleString('pt-BR'))} por ${h(state.usuario?.nomeExibicao || state.usuario?.nome || '')}</td></tr></table>
+    </body>
+  </html>`;
+  baixar(nomeArquivoExportacao('xls'), `\ufeff${html}`, 'application/vnd.ms-excel;charset=utf-8');
 }
 
 function render() {
-  if (!state.token) return lockView();
+  if (!state.usuario) return lockView();
+  if (state.usuario.deveTrocarSenha) return passwordChangeView();
   if (!state.controle) return app.innerHTML = '<main class="loading">Carregando controle...</main>';
   return controleView();
 }
 
 (async function init() {
   try {
+    localStorage.removeItem('token');
+    localStorage.removeItem('usuario');
+    localStorage.removeItem('selectedUserId');
     localStorage.removeItem('digitalSelecionada');
-    await carregarLock();
-    if (state.token) await carregarControle();
+    const session = await api('/api/me');
+    state.usuario = session.usuario;
+    agendarSuspensao(session.sessaoExpiraEm);
+    if (!state.usuario.deveTrocarSenha) {
+      await carregarControle();
+      await carregarUsuarios();
+    }
     render();
   } catch (err) {
     if (err.status !== 401) state.lockStatus = err.message;
+    else limparSessao('Identifique-se para acessar o controle.');
     render();
   }
 }());
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && state.usuario && state.sessionExpiresAt <= Date.now()) suspenderSessao();
+});

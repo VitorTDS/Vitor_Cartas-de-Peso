@@ -37,6 +37,8 @@ function migrateUsuariosProfileCheck() {
       email TEXT NOT NULL UNIQUE,
       perfil TEXT NOT NULL CHECK (perfil IN ('administrador','producao','qualidade','supervisor','consulta_auditoria')),
       senha_hash TEXT NOT NULL,
+      deve_trocar_senha INTEGER NOT NULL DEFAULT 1,
+      sessao_versao INTEGER NOT NULL DEFAULT 1,
       avatar_url TEXT,
       ultimo_acesso TEXT,
       status TEXT NOT NULL DEFAULT 'ativo',
@@ -254,6 +256,8 @@ function migrate() {
   ensureColumn('usuarios', 'cargo', 'TEXT');
   ensureColumn('usuarios', 'avatar_url', 'TEXT');
   ensureColumn('usuarios', 'ultimo_acesso', 'TEXT');
+  ensureColumn('usuarios', 'deve_trocar_senha', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn('usuarios', 'sessao_versao', 'INTEGER NOT NULL DEFAULT 1');
 
   const count = db.prepare('SELECT COUNT(*) AS total FROM usuarios').get().total;
   if (count === 0) {
@@ -306,7 +310,7 @@ function migrate() {
     `).run('1', 'ECH-501013', 'ECH-501013', 'BAL-501004', 'BAL-501004', 'ativo', 'Exemplo inicial');
   }
 
-  run('INSERT OR IGNORE INTO configuracoes (chave,valor) VALUES (?,?)', ['bloqueio_automatico_minutos', '15']);
+  run('INSERT OR REPLACE INTO configuracoes (chave,valor,atualizado_em) VALUES (?,?,CURRENT_TIMESTAMP)', ['bloqueio_automatico_minutos', '50']);
 
   run('INSERT OR IGNORE INTO controle_densidade (id,dados_json) VALUES (?,?)', [1, JSON.stringify({
     cabecalho: {

@@ -1,14 +1,17 @@
-Set-Location -LiteralPath 'C:\novo\CARTAS DE PESO SOBRAL'
-$root = 'C:\novo\CARTAS DE PESO SOBRAL'
-$heartbeat = Join-Path $root 'logs\watch-heartbeat.txt'
-$marker = Join-Path $root 'logs\launcher-marker.txt'
+$root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$logsPath = Join-Path $root 'backend\logs'
+$serverPath = Join-Path $root 'backend\src\server.js'
+New-Item -ItemType Directory -Path $logsPath -Force | Out-Null
+Set-Location -LiteralPath $root
+$heartbeat = Join-Path $logsPath 'watch-heartbeat.txt'
+$marker = Join-Path $logsPath 'launcher-marker.txt'
 Set-Content -LiteralPath $marker -Value (Get-Date).ToString('o')
 
 while ($true) {
   try {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = 'C:\Program Files\nodejs\node.exe'
-    $psi.Arguments = '--no-warnings "C:\novo\CARTAS DE PESO SOBRAL\src\server.js"'
+    $psi.FileName = (Get-Command node).Source
+    $psi.Arguments = "--no-warnings `"$serverPath`""
     $psi.WorkingDirectory = $root
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
@@ -22,8 +25,8 @@ while ($true) {
     $proc.WaitForExit()
     $stdout = $stdoutTask.GetAwaiter().GetResult()
     $stderr = $stderrTask.GetAwaiter().GetResult()
-    if ($stdout) { Add-Content -LiteralPath (Join-Path $root 'logs\watch-stdout.log') -Value $stdout }
-    if ($stderr) { Add-Content -LiteralPath (Join-Path $root 'logs\watch-stderr.log') -Value $stderr }
+    if ($stdout) { Add-Content -LiteralPath (Join-Path $logsPath 'watch-stdout.log') -Value $stdout }
+    if ($stderr) { Add-Content -LiteralPath (Join-Path $logsPath 'watch-stderr.log') -Value $stderr }
     Add-Content -LiteralPath $heartbeat -Value "pid=$($proc.Id) exited=$($proc.ExitCode) at $((Get-Date).ToString('o'))"
   } catch {
     Add-Content -LiteralPath $heartbeat -Value "error=$(($_.Exception.Message)) at $(Get-Date).ToString('o')"

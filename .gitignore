@@ -1,10 +1,11 @@
-node_modules/
-data/*.sqlite
-data/*.sqlite-*
+﻿node_modules/
+backend/data/*.sqlite
+backend/data/*.sqlite-*
+backend/data/.jwt-secret
 .env
 npm-debug.log*
-logs/
+backend/logs/
 
-# Arquivos tempor�rios locais
+# Arquivos temporários locais
 %RUN%
 tmp/
