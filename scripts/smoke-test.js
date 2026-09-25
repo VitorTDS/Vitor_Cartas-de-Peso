@@ -5,7 +5,7 @@ const env = {
   ...process.env,
   PORT: String(port),
   DATABASE_PATH: './data/smoke-test.sqlite',
-  JWT_SECRET: 'smoke-test-secret-cartas-de-peso-32chars',
+  JWT_SECRET: 'smoke-test-secret-controle-densidade-32chars',
 };
 
 function wait(ms) {
@@ -27,66 +27,72 @@ async function request(path, options = {}) {
   try {
     await wait(1200);
     const lockUsers = await request('/api/lock/users');
-    const adminUser = lockUsers.data.find((u) => u.perfil === 'administrador');
+    const adminUser = lockUsers.data.find((user) => user.perfil === 'administrador');
+    const producaoUser = lockUsers.data.find((user) => user.perfil === 'producao');
+    if (!adminUser) throw new Error('Usuario administrador nao encontrado.');
+    if (!producaoUser) throw new Error('Usuario de producao nao encontrado.');
+
+    const loginProducao = await request('/api/lock/auth', {
+      method: 'POST',
+      body: JSON.stringify({ usuarioId: producaoUser.id, metodo: 'pin', pin: 'producao123' }),
+    });
+    if (!loginProducao.token) throw new Error('Login por senha da producao falhou.');
+
     const login = await request('/api/lock/auth', {
       method: 'POST',
       body: JSON.stringify({ usuarioId: adminUser.id, metodo: 'pin', pin: 'admin123' }),
     });
     const auth = { Authorization: `Bearer ${login.token}` };
-    await request(`/api/usuarios/${adminUser.id}/biometria`, {
-      method: 'POST',
-      headers: auth,
-      body: '{}',
-    });
-    await request('/api/lock/auth', {
-      method: 'POST',
-      body: JSON.stringify({ usuarioId: adminUser.id, metodo: 'digital', biometricResult: 'recognized' }),
-    });
-    const produtos = await request('/api/produtos', { headers: auth });
-    const maquinas = await request('/api/maquinas-balancas', { headers: auth });
-    const produto = produtos.data[0];
-    const maquina = maquinas.data[0];
-    const carta = await request('/api/cartas', {
+
+    const novoUsuario = await request('/api/usuarios', {
       method: 'POST',
       headers: auth,
       body: JSON.stringify({
-        produtoId: produto.id,
-        lote: `SMOKE-${Date.now()}`,
-        maquinaBalancaId: maquina.id,
-        responsavelAbertura: 'Smoke Test',
-        frequenciaMinutos: 30,
-        toleranciaMinutos: 10,
+        nome: 'Usuario Smoke',
+        nomeExibicao: 'Smoke',
+        matricula: 'SMK-001',
+        setor: 'Producao',
+        cargo: 'Operador',
+        email: `smoke-${Date.now()}@sobral.local`,
+        perfil: 'producao',
+        status: 'ativo',
+        senha: 'smoke123',
       }),
     });
-    await request(`/api/cartas/${carta.id}/coletas`, {
-      method: 'POST',
-      headers: auth,
-      body: JSON.stringify({
-        numeroColeta: 1,
-        responsavel: 'Smoke Test',
-        data: '2026-06-11',
-        hora: '10:00',
-        taraEmbalagemG: 26,
-        pesosBrutos: [229.1, 229.2, 229.3, 229.4, 229.5, 229.6, 229.7, 229.8, 229.9, 230.0],
-      }),
-    });
-    const detalhe = await request(`/api/cartas/${carta.id}`, { headers: auth });
-    if (detalhe.coletas.length !== 1 || !detalhe.resumo.totalAmostras) {
-      throw new Error('Resumo da carta não foi calculado.');
+    if (!novoUsuario.id || novoUsuario.perfil !== 'producao') {
+      throw new Error('Cadastro de usuario nao retornou usuario valido.');
     }
-    await request(`/api/cartas/${carta.id}/fechamento`, {
-      method: 'POST',
+
+    const usuarios = await request('/api/usuarios', { headers: auth });
+    const adminAtual = usuarios.data.find((user) => user.id === adminUser.id);
+    if (!adminAtual || Object.keys(adminAtual).some((key) => /biometric|digital/i.test(key))) {
+      throw new Error('A API ainda expos dados de biometria.');
+    }
+
+    const controle = await request('/api/controle-densidade', { headers: auth });
+    controle.cabecalho.lote = `SMOKE-${Date.now()}`;
+    controle.verificacoes = [{
+      id: 'smoke-1',
+      realizadoPor: 'Smoke Test',
+      data: '2026-06-12',
+      hora: '10:00',
+      pesos: [202.52, 202.5, 202.54, 202.51, 202.49, 202.53, 202.5, 202.52, 202.51, 202.5],
+    }];
+
+    await request('/api/controle-densidade', {
+      method: 'PUT',
       headers: auth,
-      body: JSON.stringify({
-        statusFinal: 'aprovado',
-        conferidoPor: 'Smoke Test',
-        metodoAssinatura: 'pin',
-        pin: 'admin123',
-        justificativa: 'Fechamento de validação automatizada.',
-      }),
+      body: JSON.stringify(controle),
     });
-    const logs = await request('/api/logs-acesso', { headers: auth });
-    if (!logs.data.length) throw new Error('Logs de acesso não foram registrados.');
+
+    const salvo = await request('/api/controle-densidade', { headers: auth });
+    if (salvo.verificacoes.length !== 1 || salvo.verificacoes[0].pesos.length !== 10) {
+      throw new Error('Controle de densidade nao persistiu a verificacao.');
+    }
+    if (salvo.cabecalho.lote !== controle.cabecalho.lote) {
+      throw new Error('Cabecalho editavel nao persistiu.');
+    }
+
     console.log('Smoke test OK');
   } finally {
     server.kill('SIGTERM');

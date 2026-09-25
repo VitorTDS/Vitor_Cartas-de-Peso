@@ -38,9 +38,6 @@ function migrateUsuariosProfileCheck() {
       perfil TEXT NOT NULL CHECK (perfil IN ('administrador','producao','qualidade','supervisor','consulta_auditoria')),
       senha_hash TEXT NOT NULL,
       avatar_url TEXT,
-      biometric_template_id TEXT,
-      biometric_provider TEXT,
-      digital_cadastrada INTEGER NOT NULL DEFAULT 0,
       ultimo_acesso TEXT,
       status TEXT NOT NULL DEFAULT 'ativo',
       criado_em TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -106,9 +103,6 @@ function migrate() {
       perfil TEXT NOT NULL CHECK (perfil IN ('administrador','producao','qualidade','supervisor','consulta_auditoria')),
       senha_hash TEXT NOT NULL,
       avatar_url TEXT,
-      biometric_template_id TEXT,
-      biometric_provider TEXT,
-      digital_cadastrada INTEGER NOT NULL DEFAULT 0,
       ultimo_acesso TEXT,
       status TEXT NOT NULL DEFAULT 'ativo',
       criado_em TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -239,6 +233,12 @@ function migrate() {
       atualizado_em TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS controle_densidade (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      dados_json TEXT NOT NULL,
+      atualizado_em TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE INDEX IF NOT EXISTS idx_cartas_filtros ON cartas(produto_id, lote, status, data_abertura);
     CREATE INDEX IF NOT EXISTS idx_coletas_carta ON coletas(carta_id, numero_coleta);
     CREATE INDEX IF NOT EXISTS idx_auditoria_entidade ON auditoria(entidade, entidade_id);
@@ -253,9 +253,6 @@ function migrate() {
   ensureColumn('usuarios', 'setor', 'TEXT');
   ensureColumn('usuarios', 'cargo', 'TEXT');
   ensureColumn('usuarios', 'avatar_url', 'TEXT');
-  ensureColumn('usuarios', 'biometric_template_id', 'TEXT');
-  ensureColumn('usuarios', 'biometric_provider', 'TEXT');
-  ensureColumn('usuarios', 'digital_cadastrada', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('usuarios', 'ultimo_acesso', 'TEXT');
 
   const count = db.prepare('SELECT COUNT(*) AS total FROM usuarios').get().total;
@@ -310,6 +307,25 @@ function migrate() {
   }
 
   run('INSERT OR IGNORE INTO configuracoes (chave,valor) VALUES (?,?)', ['bloqueio_automatico_minutos', '15']);
+
+  run('INSERT OR IGNORE INTO controle_densidade (id,dados_json) VALUES (?,?)', [1, JSON.stringify({
+    cabecalho: {
+      produto: 'AGUALEMA SOBRAL 200 ML',
+      lote: '260227',
+      volumeDeclaradoMl: 200,
+      variacaoPermitidaPercentual: 1,
+      densidadeDeclarada: 1.0126,
+      pesoEmbalagemPrimariaG: 26.07,
+      minimoMl: 200,
+      maximoMl: 202,
+      maquinaTag: 'ECH-501013',
+      linha: '',
+      tagBalanca: 'BAL-501004',
+      frequenciaMinutos: 30,
+      toleranciaMinutos: 10
+    },
+    verificacoes: []
+  })]);
 }
 
 function all(sql, params = []) {

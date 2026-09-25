@@ -6,7 +6,6 @@ const config = require('./config');
 const { migrate, all, get, run, auditar, db, registrarAcesso, registrarAssinatura } = require('./db');
 const { verificarSenha, assinar, verificarToken, hashSenha } = require('./auth');
 const { calcularColeta, calcularResumoCarta } = require('./calculos');
-const BiometricService = require('./biometricService');
 
 const publicDir = path.resolve('public');
 
@@ -99,11 +98,75 @@ function mapUsuario(row) {
     perfil: row.perfil,
     status: row.status,
     avatarUrl: row.avatar_url || '',
-    digitalCadastrada: Boolean(row.digital_cadastrada),
-    biometricProvider: row.biometric_provider || 'simulado',
     ultimoAcesso: row.ultimo_acesso,
     criadoEm: row.criado_em,
   };
+}
+
+function controlePadrao() {
+  return {
+    cabecalho: {
+      produto: 'AGUALEMA SOBRAL 200 ML',
+      lote: '260227',
+      volumeDeclaradoMl: 200,
+      variacaoPermitidaPercentual: 1,
+      densidadeDeclarada: 1.0126,
+      pesoEmbalagemPrimariaG: 26.07,
+      minimoMl: 200,
+      maximoMl: 202,
+      maquinaTag: 'ECH-501013',
+      linha: '',
+      tagBalanca: 'BAL-501004',
+      frequenciaMinutos: 30,
+      toleranciaMinutos: 10,
+    },
+    verificacoes: [],
+  };
+}
+
+function normalizarControle(body) {
+  const atual = controlePadrao();
+  const cabecalho = { ...atual.cabecalho, ...(body.cabecalho || {}) };
+  const numero = (valor, fallback) => {
+    const parsed = Number(String(valor).replace(',', '.'));
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+  const volumeDeclaradoMl = numero(cabecalho.volumeDeclaradoMl, atual.cabecalho.volumeDeclaradoMl);
+  const variacaoPermitidaPercentual = numero(cabecalho.variacaoPermitidaPercentual, atual.cabecalho.variacaoPermitidaPercentual);
+  return {
+    cabecalho: {
+      produto: texto(cabecalho, 'produto', false) || atual.cabecalho.produto,
+      lote: texto(cabecalho, 'lote', false),
+      volumeDeclaradoMl,
+      variacaoPermitidaPercentual,
+      densidadeDeclarada: numero(cabecalho.densidadeDeclarada, atual.cabecalho.densidadeDeclarada),
+      pesoEmbalagemPrimariaG: numero(cabecalho.pesoEmbalagemPrimariaG, atual.cabecalho.pesoEmbalagemPrimariaG),
+      minimoMl: volumeDeclaradoMl,
+      maximoMl: volumeDeclaradoMl * (1 + variacaoPermitidaPercentual / 100),
+      maquinaTag: texto(cabecalho, 'maquinaTag', false),
+      linha: texto(cabecalho, 'linha', false),
+      tagBalanca: texto(cabecalho, 'tagBalanca', false),
+      frequenciaMinutos: numero(cabecalho.frequenciaMinutos, atual.cabecalho.frequenciaMinutos),
+      toleranciaMinutos: numero(cabecalho.toleranciaMinutos, atual.cabecalho.toleranciaMinutos),
+    },
+    verificacoes: Array.isArray(body.verificacoes) ? body.verificacoes.map((item) => ({
+      id: texto(item, 'id', false) || String(Date.now()),
+      realizadoPor: texto(item, 'realizadoPor', false),
+      data: texto(item, 'data', false),
+      hora: texto(item, 'hora', false),
+      pesos: Array.from({ length: 10 }, (_, index) => numero(item.pesos?.[index], 0)),
+    })) : [],
+  };
+}
+
+function carregarControle() {
+  const row = get('SELECT dados_json, atualizado_em FROM controle_densidade WHERE id = 1');
+  if (!row) return { ...controlePadrao(), atualizadoEm: null };
+  try {
+    return { ...normalizarControle(JSON.parse(row.dados_json)), atualizadoEm: row.atualizado_em };
+  } catch {
+    return { ...controlePadrao(), atualizadoEm: row.atualizado_em };
+  }
 }
 
 function usuarioPayload(body, existente = {}) {
@@ -122,15 +185,10 @@ function usuarioPayload(body, existente = {}) {
 }
 
 function validarAssinatura(usuario, body) {
-  const metodo = body.metodoAssinatura || body.metodo || 'pin';
   const row = get('SELECT * FROM usuarios WHERE id = ? AND status = ?', [usuario.id, 'ativo']);
-  if (!row) return { ok: false, metodo, mensagem: 'Usuario nao encontrado.' };
-  if (metodo === 'digital') {
-    const ok = BiometricService.verify({ templateId: row.biometric_template_id, simulatedResult: body.biometricResult });
-    return { ok, metodo, mensagem: ok ? 'Digital reconhecida.' : 'Digital nao reconhecida.' };
-  }
+  if (!row) return { ok: false, metodo: 'senha', mensagem: 'Usuario nao encontrado.' };
   const ok = verificarSenha(body.pin || body.senha || body.assinaturaResponsavel || '', row.senha_hash);
-  return { ok, metodo: 'pin', mensagem: ok ? 'PIN validado.' : 'PIN invalido.' };
+  return { ok, metodo: 'senha', mensagem: ok ? 'Senha validada.' : 'Senha invalida.' };
 }
 
 function produtoPayload(body) {
@@ -265,10 +323,6 @@ async function api(req, res) {
     return json(res, 200, { bloqueioAutomaticoMinutos: row?.valor || '15' });
   }
 
-  if (method === 'GET' && pathName === '/api/biometria/status') {
-    return json(res, 200, BiometricService.status());
-  }
-
   if (method === 'POST' && pathName === '/api/lock/auth') {
     const body = await lerBody(req);
     const row = get('SELECT * FROM usuarios WHERE id = ? AND status = ?', [Number(body.usuarioId), 'ativo']);
@@ -278,13 +332,11 @@ async function api(req, res) {
       return erro(res, 401, 'INVALID_LOGIN', 'Usuário não encontrado ou inativo.');
     }
 
-    const metodo = body.metodo === 'digital' ? 'digital' : 'pin';
-    const ok = metodo === 'digital'
-      ? BiometricService.verify({ templateId: row.biometric_template_id, simulatedResult: body.biometricResult })
-      : verificarSenha(body.pin || body.senha || '', row.senha_hash);
+    const metodo = 'senha';
+    const ok = verificarSenha(body.pin || body.senha || '', row.senha_hash);
 
     registrarAcesso(usuario, metodo, ok ? 'sucesso' : 'falha', dispositivo(req), ok ? 'Acesso liberado.' : 'Falha de autenticação.');
-    if (!ok) return erro(res, 401, 'INVALID_LOGIN', metodo === 'digital' ? 'Digital não reconhecida.' : 'PIN ou senha inválida.');
+    if (!ok) return erro(res, 401, 'INVALID_LOGIN', 'Senha inválida.');
 
     return json(res, 200, {
       token: assinar({ id: usuario.id, perfil: usuario.perfil }),
@@ -311,6 +363,40 @@ async function api(req, res) {
   if (!usuario) return;
 
   if (method === 'GET' && pathName === '/api/me') return json(res, 200, { usuario });
+
+  if (pathName === '/api/controle-densidade') {
+    if (method === 'GET') return json(res, 200, carregarControle());
+    if (method === 'PUT') {
+      const anterior = carregarControle();
+      const dados = normalizarControle(await lerBody(req));
+      run('UPDATE controle_densidade SET dados_json = ?, atualizado_em = CURRENT_TIMESTAMP WHERE id = 1', [JSON.stringify(dados)]);
+      auditar(usuario, 'controle_densidade', 1, 'salvou', anterior, dados);
+      return json(res, 200, carregarControle());
+    }
+  }
+
+  if (pathName === '/api/usuarios') {
+    const admin = exigir(req, res, ['administrador']);
+    if (!admin) return;
+    if (method === 'GET') {
+      return json(res, 200, { data: all('SELECT * FROM usuarios ORDER BY nome_exibicao, nome').map(mapUsuario) });
+    }
+    if (method === 'POST') {
+      const body = await lerBody(req);
+      const u = usuarioPayload(body);
+      const info = run(`
+        INSERT INTO usuarios (nome,nome_exibicao,matricula,setor,cargo,email,perfil,senha_hash,status,avatar_url)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
+      `, [
+        u.nome, u.nomeExibicao, u.matricula, u.setor, u.cargo, u.email, u.perfil, hashSenha(u.senha), u.status, u.avatarUrl,
+      ]);
+      const novo = mapUsuario(get('SELECT * FROM usuarios WHERE id=?', [info.lastInsertRowid]));
+      auditar(admin, 'usuarios', info.lastInsertRowid, 'criou', null, { ...novo, senha: '[protegida]' });
+      return json(res, 201, novo);
+    }
+  }
+
+  return erro(res, 404, 'NOT_FOUND', 'Modulo indisponivel nesta versao. Use o Controle de Densidade.');
 
   if (pathName === '/api/configuracoes/bloqueio') {
     const admin = exigir(req, res, ['administrador']);
@@ -415,23 +501,6 @@ async function api(req, res) {
     const novo = mapUsuario(get('SELECT * FROM usuarios WHERE id=?', [id]));
     auditar(admin, 'usuarios', id, 'alterou', anterior, { ...novo, senha: '[protegida]' });
     return json(res, 200, novo);
-  }
-
-  const biometriaMatch = pathName.match(/^\/api\/usuarios\/(\d+)\/biometria$/);
-  if (biometriaMatch && method === 'POST') {
-    const admin = exigir(req, res, ['administrador']);
-    if (!admin) return;
-    const id = Number(biometriaMatch[1]);
-    const usuarioBio = mapUsuario(get('SELECT * FROM usuarios WHERE id = ?', [id]));
-    if (!usuarioBio) return erro(res, 404, 'NOT_FOUND', 'Usuário não encontrado.');
-    const enrollment = BiometricService.enroll(id);
-    run('UPDATE usuarios SET biometric_template_id=?, biometric_provider=?, digital_cadastrada=1 WHERE id=?', [
-      enrollment.templateId,
-      enrollment.provider,
-      id,
-    ]);
-    auditar(admin, 'usuarios', id, 'cadastrou_digital', null, { usuarioId: id, provider: enrollment.provider, templateId: '[protegido]' });
-    return json(res, 200, { usuario: mapUsuario(get('SELECT * FROM usuarios WHERE id = ?', [id])), biometric: { provider: enrollment.provider, status: 'cadastrada' } });
   }
 
   if (pathName === '/api/logs-acesso' && method === 'GET') {

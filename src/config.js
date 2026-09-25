@@ -1,4 +1,7 @@
 const path = require('node:path');
+const { loadEnvFile } = require('./env');
+
+loadEnvFile();
 
 const config = {
   port: Number(process.env.PORT || 8787),
