@@ -2,23 +2,10 @@ const app = document.querySelector('#app');
 
 const state = {
   usuario: null,
-  usuarios: [],
-  tab: localStorage.getItem('tab') || 'cartas',
-  lockStatus: 'Identifique-se para acessar o controle.',
   controle: null,
   saving: false,
   toast: '',
   saveTimer: null,
-  sessionTimer: null,
-  sessionExpiresAt: 0,
-};
-
-const perfilLabel = {
-  administrador: 'Administrador',
-  producao: 'Producao',
-  qualidade: 'Qualidade',
-  supervisor: 'Supervisor',
-  consulta_auditoria: 'Consulta/Auditoria',
 };
 
 const h = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -60,10 +47,6 @@ async function api(path, options = {}) {
     const error = new Error(body.error?.message || 'Nao foi possivel concluir a operacao.');
     error.status = res.status;
     error.code = body.error?.code;
-    if (res.status === 401 && state.usuario && path !== '/api/change-password') {
-      limparSessao('Sua sessao expirou. Entre novamente.');
-      render();
-    }
     throw error;
   }
   return body;
@@ -78,202 +61,8 @@ function setToast(message) {
   }, 2600);
 }
 
-async function carregarUsuarios() {
-  if (state.usuario?.perfil !== 'administrador') return;
-  const body = await api('/api/usuarios');
-  state.usuarios = body.data || [];
-}
-
 async function carregarControle() {
   state.controle = await api('/api/controle-densidade');
-}
-
-function avatar(usuario) {
-  const nome = usuario?.nomeExibicao || usuario?.nome || '?';
-  const iniciais = nome.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase();
-  return `<span class="avatar">${h(iniciais)}</span>`;
-}
-
-function lockView() {
-  app.innerHTML = `
-    <section class="lock-screen">
-      <aside class="lock-users">
-        <div class="brand"><span class="mark">CP</span><div><h1>CARTAS DE PESO</h1><small>Controle de densidade</small></div></div>
-        <div class="login-info">
-          <span class="eyebrow">Acesso protegido</span>
-          <h2>Controle confiável do início ao fim.</h2>
-          <p>Sua sessão permanece ativa por 50 minutos. Depois desse período, o sistema entra em suspensão automaticamente.</p>
-          <ul>
-            <li>Dados protegidos por perfil de acesso</li>
-            <li>Alterações registradas em auditoria</li>
-            <li>Sessão encerrada automaticamente</li>
-          </ul>
-        </div>
-      </aside>
-      <main class="lock-main">
-        <form id="lockForm" class="login-card">
-          <span class="eyebrow">Bem-vindo</span>
-          <h2>Entre no sistema</h2>
-          <p>Use seu e-mail corporativo e sua senha.</p>
-          <div class="login-status">${h(state.lockStatus)}</div>
-          <label>E-mail
-            <input name="email" type="email" autocomplete="username" required autofocus>
-          </label>
-          <label>Senha
-            <input name="senha" type="password" autocomplete="current-password" required>
-          </label>
-          <div class="actions">
-            <button type="submit">Entrar</button>
-          </div>
-        </form>
-      </main>
-    </section>
-  `;
-  document.querySelector('#lockForm')?.addEventListener('submit', autenticar);
-}
-
-async function autenticar(event) {
-  event.preventDefault();
-  try {
-    const payload = Object.fromEntries(new FormData(event.currentTarget));
-    const body = await api('/api/login', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-    state.usuario = body.usuario;
-    agendarSuspensao(body.sessaoExpiraEm);
-    if (!state.usuario.deveTrocarSenha) {
-      await carregarControle();
-      await carregarUsuarios();
-    }
-    render();
-  } catch (err) {
-    state.lockStatus = err.message;
-    render();
-  }
-}
-
-async function cadastrarUsuario(event) {
-  event.preventDefault();
-  const form = event.currentTarget;
-  state.saving = true;
-  renderStatus();
-  try {
-    await api('/api/usuarios', {
-      method: 'POST',
-      body: JSON.stringify(Object.fromEntries(new FormData(form))),
-    });
-    await carregarUsuarios();
-    setToast('Usuario cadastrado.');
-  } catch (err) {
-    setToast(err.message);
-  } finally {
-    state.saving = false;
-    render();
-  }
-}
-
-function limparSessao(message) {
-  localStorage.removeItem('token');
-  localStorage.removeItem('usuario');
-  sessionStorage.removeItem('sessionExpiresAt');
-  clearTimeout(state.sessionTimer);
-  state.sessionTimer = null;
-  state.sessionExpiresAt = 0;
-  state.usuario = null;
-  state.usuarios = [];
-  state.controle = null;
-  state.lockStatus = message;
-}
-
-async function sair() {
-  try {
-    await api('/api/logout', { method: 'POST', body: '{}' });
-  } finally {
-    limparSessao('Sessão encerrada.');
-    render();
-  }
-}
-
-function agendarSuspensao(expiresAt) {
-  clearTimeout(state.sessionTimer);
-  state.sessionExpiresAt = Number(expiresAt || 0);
-  sessionStorage.setItem('sessionExpiresAt', String(state.sessionExpiresAt));
-  const restante = Math.max(0, state.sessionExpiresAt - Date.now());
-  state.sessionTimer = setTimeout(() => suspenderSessao(), restante);
-}
-
-async function suspenderSessao() {
-  if (!state.usuario) return;
-  if (state.saveTimer) {
-    clearTimeout(state.saveTimer);
-    state.saveTimer = null;
-    try { await salvarAgora(); } catch { /* a sessão pode vencer durante o último salvamento */ }
-  }
-  try {
-    await fetch('/api/logout', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-  } finally {
-    limparSessao('Sistema suspenso após 50 minutos. Entre novamente para continuar.');
-    render();
-  }
-}
-
-function passwordChangeView() {
-  app.innerHTML = `
-    <section class="lock-screen password-change-screen">
-      <aside class="lock-users">
-        <div class="brand"><span class="mark">CP</span><div><h1>CARTAS DE PESO</h1><small>Proteção da conta</small></div></div>
-        <div class="login-info">
-          <span class="eyebrow">Primeiro acesso</span>
-          <h2>Crie uma senha somente sua.</h2>
-          <p>A nova senha deve ter pelo menos 10 caracteres e combinar três destes grupos:</p>
-          <ul><li>Letras maiúsculas</li><li>Letras minúsculas</li><li>Números</li><li>Símbolos</li></ul>
-        </div>
-      </aside>
-      <main class="lock-main">
-        <form id="passwordChangeForm" class="login-card">
-          <span class="eyebrow">Segurança obrigatória</span>
-          <h2>Troque sua senha inicial</h2>
-          <div class="login-status">${h(state.lockStatus)}</div>
-          <label>Senha atual<input name="senhaAtual" type="password" autocomplete="current-password" required></label>
-          <label>Nova senha<input name="novaSenha" type="password" autocomplete="new-password" minlength="10" required></label>
-          <label>Confirmar nova senha<input name="confirmacao" type="password" autocomplete="new-password" minlength="10" required></label>
-          <div class="actions"><button type="submit">Salvar nova senha</button></div>
-        </form>
-      </main>
-    </section>
-  `;
-  document.querySelector('#passwordChangeForm')?.addEventListener('submit', trocarSenhaInicial);
-}
-
-async function trocarSenhaInicial(event) {
-  event.preventDefault();
-  const payload = Object.fromEntries(new FormData(event.currentTarget));
-  if (payload.novaSenha !== payload.confirmacao) {
-    state.lockStatus = 'A confirmação não corresponde à nova senha.';
-    return render();
-  }
-  try {
-    const body = await api('/api/change-password', {
-      method: 'POST',
-      body: JSON.stringify({ senhaAtual: payload.senhaAtual, novaSenha: payload.novaSenha }),
-    });
-    state.usuario = body.usuario;
-    state.lockStatus = 'Senha atualizada com sucesso.';
-    agendarSuspensao(body.sessaoExpiraEm);
-    await carregarControle();
-    await carregarUsuarios();
-    render();
-  } catch (err) {
-    state.lockStatus = err.message;
-    render();
-  }
-}
-
-function setTab(tab) {
-  state.tab = tab;
-  localStorage.setItem('tab', tab);
-  render();
 }
 
 function atualizarCabecalho(campo, value) {
@@ -322,7 +111,7 @@ function novaVerificacao() {
   }
   state.controle.verificacoes.push({
     id: `${Date.now()}`,
-    realizadoPor: state.usuario?.nomeExibicao || state.usuario?.nome || '',
+    realizadoPor: '',
     data,
     hora,
     pesos: Array.from({ length: 10 }, () => 0),
@@ -390,8 +179,6 @@ function field(label, campo, type = 'text', step = '', readonly = false) {
 }
 
 const controleView = function controleViewSidebar() {
-  const admin = state.usuario?.perfil === 'administrador';
-  const tab = state.tab === 'usuarios' && !admin ? 'cartas' : state.tab;
   app.innerHTML = `
     <div class="app-shell split-shell">
       <aside class="internal-sidebar">
@@ -402,34 +189,25 @@ const controleView = function controleViewSidebar() {
             <small>Controle de densidade · Sobral</small>
           </div>
         </div>
-        <div class="internal-user">
-          ${avatar(state.usuario)}
-          <div>
-            <strong>${h(state.usuario?.nomeExibicao || state.usuario?.nome)}</strong>
-            <span>${h(perfilLabel[state.usuario?.perfil] || state.usuario?.perfil)}</span>
-          </div>
-        </div>
         <nav class="internal-tabs" aria-label="Acoes internas">
           <span class="nav-label">Menu principal</span>
-          <button type="button" class="${tab === 'cartas' ? 'active' : ''}" data-tab="cartas"><span aria-hidden="true">▦</span> Cartas de peso</button>
-          ${admin ? `<button type="button" class="${tab === 'usuarios' ? 'active' : ''}" data-tab="usuarios"><span aria-hidden="true">♙</span> Usuários</button>` : ''}
+          <button type="button" class="active" data-tab="cartas"><span aria-hidden="true">▦</span> Cartas de peso</button>
         </nav>
         <div class="sidebar-footer">
           <span class="save-indicator"><i aria-hidden="true"></i><span id="saveStatus">Dados carregados</span></span>
-          <button class="secondary" id="logoutBtn" type="button">Sair do sistema</button>
         </div>
       </aside>
       <main class="internal-main">
         <header class="workspace-header">
           <div>
             <span class="eyebrow">Controle de processo</span>
-            <h1>${tab === 'cartas' ? 'CARTAS DE PESO' : 'Gestão de usuários'}</h1>
-            <p>${tab === 'cartas' ? `Acompanhamento de volume por densidade a cada ${fmt(state.controle.cabecalho.frequenciaMinutos, 0)} minutos.` : 'Cadastre e gerencie os acessos da equipe.'}</p>
+            <h1>CARTAS DE PESO</h1>
+            <p>Acompanhamento de volume por densidade a cada ${fmt(state.controle.cabecalho.frequenciaMinutos, 0)} minutos.</p>
           </div>
           <div class="workspace-date">${new Intl.DateTimeFormat('pt-BR', { dateStyle: 'long' }).format(new Date())}</div>
         </header>
         ${state.toast ? `<div class="toast">${h(state.toast)}</div>` : ''}
-        ${tab === 'cartas' ? cartasTab() : usuariosTab()}
+        ${cartasTab()}
       </main>
     </div>
   `;
@@ -483,70 +261,6 @@ function cartasTab() {
       <div id="densityTable"></div>
     </section>
   `;
-}
-
-function usuariosTab() {
-  return adminUsersTab();
-}
-
-function painelUsuarios() {
-  return `
-    <section class="module">
-      <div class="section-title">
-        <div>
-          <span class="eyebrow">Controle de acesso</span>
-          <h2>Novo usuário</h2>
-          <p class="section-description">Cadastre as pessoas que podem acessar o sistema.</p>
-        </div>
-      </div>
-      <form id="usuarioForm" class="user-form">
-        <div class="user-form-grid">
-          <label>Nome completo<input name="nome" required></label>
-          <label>Nome de exibicao<input name="nomeExibicao" required></label>
-          <label>Matricula/codigo<input name="matricula"></label>
-          <label>Setor<input name="setor"></label>
-          <label>Cargo<input name="cargo"></label>
-          <label>E-mail<input name="email" type="email" required></label>
-          <label>Perfil
-            <select name="perfil">
-              <option value="producao">Producao</option>
-              <option value="qualidade">Qualidade</option>
-              <option value="supervisor">Supervisor</option>
-              <option value="consulta_auditoria">Consulta/Auditoria</option>
-              <option value="administrador">Administrador</option>
-            </select>
-          </label>
-          <label>Status
-            <select name="status">
-              <option value="ativo">Ativo</option>
-              <option value="inativo">Inativo</option>
-            </select>
-          </label>
-          <label>Senha inicial<input name="senha" type="password" minlength="10" required></label>
-        </div>
-        <div class="actions">
-          <button type="submit">Cadastrar usuário</button>
-        </div>
-      </form>
-      <hr>
-      <div class="user-grid">
-        ${state.usuarios.map((user) => `
-          <div class="user-card">
-            <div>
-              <strong>${h(user.nomeExibicao || user.nome)}</strong>
-              <span>${h(perfilLabel[user.perfil] || user.perfil)} - ${h(user.email)}</span>
-              <small>${user.status === 'ativo' ? 'Ativo' : 'Inativo'}</small>
-            </div>
-          </div>
-        `).join('')}
-      </div>
-    </section>
-  `;
-}
-
-function adminUsersTab() {
-  if (state.usuario?.perfil !== 'administrador') return '';
-  return painelUsuarios();
 }
 
 function renderTabela() {
@@ -639,14 +353,9 @@ function renderCalculos() {
 }
 
 function bindTela() {
-  document.querySelector('#logoutBtn').addEventListener('click', sair);
-  document.querySelectorAll('[data-tab]').forEach((button) => {
-    button.addEventListener('click', () => setTab(button.dataset.tab));
-  });
   document.querySelector('#addColumnBtn')?.addEventListener('click', novaVerificacao);
   document.querySelector('#csvBtn')?.addEventListener('click', exportarCsv);
   document.querySelector('#excelBtn')?.addEventListener('click', exportarExcel);
-  document.querySelector('#usuarioForm')?.addEventListener('submit', cadastrarUsuario);
   document.querySelectorAll('[data-card-shortcut]').forEach((button) => {
     button.addEventListener('click', () => {
       document.querySelectorAll('[data-card-shortcut]').forEach((item) => item.classList.remove('active'));
@@ -811,40 +520,24 @@ function exportarExcel() {
         ${volumes}
         ${resumo}
       </table>
-      <table><tr><td class="footer">Exportado em ${h(new Date().toLocaleString('pt-BR'))} por ${h(state.usuario?.nomeExibicao || state.usuario?.nome || '')}</td></tr></table>
+      <table><tr><td class="footer">Exportado em ${h(new Date().toLocaleString('pt-BR'))}</td></tr></table>
     </body>
   </html>`;
   baixar(nomeArquivoExportacao('xls'), `\ufeff${html}`, 'application/vnd.ms-excel;charset=utf-8');
 }
 
 function render() {
-  if (!state.usuario) return lockView();
-  if (state.usuario.deveTrocarSenha) return passwordChangeView();
   if (!state.controle) return app.innerHTML = '<main class="loading">Carregando controle...</main>';
   return controleView();
 }
 
 (async function init() {
   try {
-    localStorage.removeItem('token');
-    localStorage.removeItem('usuario');
-    localStorage.removeItem('selectedUserId');
-    localStorage.removeItem('digitalSelecionada');
     const session = await api('/api/me');
     state.usuario = session.usuario;
-    agendarSuspensao(session.sessaoExpiraEm);
-    if (!state.usuario.deveTrocarSenha) {
-      await carregarControle();
-      await carregarUsuarios();
-    }
+    await carregarControle();
     render();
   } catch (err) {
-    if (err.status !== 401) state.lockStatus = err.message;
-    else limparSessao('Identifique-se para acessar o controle.');
-    render();
+    app.innerHTML = `<main class="loading">${h(err.message)}</main>`;
   }
 }());
-
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && state.usuario && state.sessionExpiresAt <= Date.now()) suspenderSessao();
-});

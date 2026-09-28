@@ -32,15 +32,13 @@ npm start
 
 Acesse `http://localhost:8787`.
 
-## Acessos iniciais
+## Acesso
 
-- Administrador: `admin@sobral.local` / `admin123`
-- Producao: `producao@sobral.local` / `producao123`
-- Qualidade: `qualidade@sobral.local` / `qualidade123`
-
-Troque as senhas antes de usar fora de ambiente de teste.
-
-No primeiro acesso, o sistema exige a troca da senha inicial. A sessão permanece ativa por 50 minutos e depois entra em suspensão, retornando automaticamente à tela de login.
+Por enquanto o sistema não tem tela de login: toda requisição usa um usuário
+único com acesso full (perfil administrador), pensado para ser embutido dentro
+do GESTÃO SBR, que cuidará do controle de acesso. Essa é uma decisão interina —
+quando a integração com o GESTÃO SBR for definida, este ponto muda para usar a
+identidade repassada por ele.
 
 ## Modulo Principal
 
@@ -56,11 +54,6 @@ Recursos implementados:
 - Formatacao condicional em vermelho para densidade ou volume fora da faixa permitida.
 - Persistencia no SQLite pela tabela `controle_densidade`.
 - Exportacao em CSV e Excel (`.xls`).
-- Login por senha para todos os perfis.
-- Sessão protegida por cookie `HttpOnly` com duração de 50 minutos.
-- Bloqueio temporário após cinco tentativas incorretas de login.
-- Troca obrigatória da senha inicial.
-- Cadastro de novos usuarios pelo administrador.
 
 ## Variaveis
 
@@ -79,5 +72,7 @@ Quando `JWT_SECRET` não é informado ou ainda contém o valor inseguro de desen
 
 - Backend em Node.js com `node:http` e `node:sqlite`.
 - Frontend SPA em HTML/CSS/JavaScript nativo.
-- A autenticacao existente foi mantida para controle de acesso.
+- Sem tela de login por enquanto (ver secao "Acesso") — `backend/src/auth.js` e a
+  tabela `usuarios` continuam no repositorio, sem uso, como ponto de partida para
+  quando a identidade vier do GESTÃO SBR.
 - Dados do controle sao salvos como JSON estruturado no SQLite.

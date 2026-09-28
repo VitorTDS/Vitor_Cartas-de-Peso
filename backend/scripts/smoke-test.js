@@ -30,81 +30,33 @@ async function waitForServer() {
 async function request(path, options = {}) {
   const res = await fetch(`http://localhost:${port}${path}`, {
     ...options,
-    headers: { 'Content-Type': 'application/json', ...(options.cookie ? { Cookie: options.cookie } : {}), ...(options.headers || {}) },
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`${res.status} ${path}: ${body.error?.message || 'erro'}`);
-  return { ...body, __cookie: String(res.headers.get('set-cookie') || '').split(';')[0], __headers: res.headers };
+  return body;
 }
 
 (async () => {
   const server = spawn(process.execPath, ['--no-warnings', 'backend/src/server.js'], { env, stdio: 'inherit' });
   try {
     await waitForServer();
-    for (let attempt = 1; attempt <= 5; attempt += 1) {
-      const failedLogin = await fetch(`http://127.0.0.1:${port}/api/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: 'bloqueio@sobral.local', senha: 'senha-incorreta' }),
-      });
-      const expectedStatus = attempt === 5 ? 429 : 401;
-      if (failedLogin.status !== expectedStatus) throw new Error(`Bloqueio de login falhou na tentativa ${attempt}.`);
+
+    const semCredencial = await fetch(`http://127.0.0.1:${port}/api/me`);
+    if (!semCredencial.ok) throw new Error('/api/me deveria responder 200 sem exigir login.');
+    const sessao = await semCredencial.json();
+    if (!sessao.usuario || sessao.usuario.perfil !== 'administrador') {
+      throw new Error('Usuario de acesso full nao foi retornado por /api/me.');
     }
 
-    const loginProducao = await request('/api/login', {
-      method: 'POST',
-      body: JSON.stringify({ email: 'producao@sobral.local', senha: 'producao123' }),
-    });
-    if (!loginProducao.usuario?.deveTrocarSenha) throw new Error('Troca da senha inicial nao foi exigida.');
-    const remaining = loginProducao.sessaoExpiraEm - Date.now();
-    if (remaining < 49 * 60 * 1000 || remaining > 51 * 60 * 1000) throw new Error('Sessao nao foi configurada para 50 minutos.');
-    if (!/HttpOnly/i.test(loginProducao.__headers.get('set-cookie') || '') || !/SameSite=Strict/i.test(loginProducao.__headers.get('set-cookie') || '')) {
-      throw new Error('Cookie de sessao sem protecoes esperadas.');
-    }
-    const producaoAlterada = await request('/api/change-password', {
-      method: 'POST',
-      cookie: loginProducao.__cookie,
-      body: JSON.stringify({ senhaAtual: 'producao123', novaSenha: 'Producao#2026' }),
-    });
-    if (producaoAlterada.usuario?.deveTrocarSenha) throw new Error('Troca de senha da producao falhou.');
-
-    const login = await request('/api/login', {
-      method: 'POST',
-      body: JSON.stringify({ email: 'admin@sobral.local', senha: 'admin123' }),
-    });
-    const adminAlterado = await request('/api/change-password', {
-      method: 'POST',
-      cookie: login.__cookie,
-      body: JSON.stringify({ senhaAtual: 'admin123', novaSenha: 'Admin#Sobral2026' }),
-    });
-    const auth = { Cookie: adminAlterado.__cookie };
-
-    const novoUsuario = await request('/api/usuarios', {
-      method: 'POST',
-      headers: auth,
-      body: JSON.stringify({
-        nome: 'Usuario Smoke',
-        nomeExibicao: 'Smoke',
-        matricula: 'SMK-001',
-        setor: 'Producao',
-        cargo: 'Operador',
-        email: `smoke-${Date.now()}@sobral.local`,
-        perfil: 'producao',
-        status: 'ativo',
-        senha: 'Smoke#Teste2026',
-      }),
-    });
-    if (!novoUsuario.id || novoUsuario.perfil !== 'producao') {
-      throw new Error('Cadastro de usuario nao retornou usuario valido.');
+    const antigasRotas = await Promise.all(
+      ['/api/login', '/api/usuarios'].map((rota) => fetch(`http://127.0.0.1:${port}${rota}`, { method: 'POST' })),
+    );
+    if (antigasRotas.some((res) => res.status !== 404)) {
+      throw new Error('Rotas de login/gestao de usuarios deveriam ter sido removidas (404).');
     }
 
-    const usuarios = await request('/api/usuarios', { headers: auth });
-    const adminAtual = usuarios.data.find((user) => user.perfil === 'administrador');
-    if (!adminAtual || Object.keys(adminAtual).some((key) => /biometric|digital/i.test(key))) {
-      throw new Error('A API ainda expos dados de biometria.');
-    }
-
-    const controle = await request('/api/controle-densidade', { headers: auth });
+    const controle = await request('/api/controle-densidade');
     controle.cabecalho.lote = `SMOKE-${Date.now()}`;
     controle.verificacoes = [{
       id: 'smoke-1',
@@ -116,11 +68,10 @@ async function request(path, options = {}) {
 
     await request('/api/controle-densidade', {
       method: 'PUT',
-      headers: auth,
       body: JSON.stringify(controle),
     });
 
-    const salvo = await request('/api/controle-densidade', { headers: auth });
+    const salvo = await request('/api/controle-densidade');
     if (salvo.verificacoes.length !== 1 || salvo.verificacoes[0].pesos.length !== 10) {
       throw new Error('Controle de densidade nao persistiu a verificacao.');
     }
