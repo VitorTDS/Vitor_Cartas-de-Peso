@@ -7,39 +7,34 @@ Submodulo: .agnostic-core/
 
 Antes de implementar:
 
-Backend:
+Backend (Node.js >=24 puro, sem framework — node:http + node:sqlite nativos):
   REST API design:    .agnostic-core/skills/backend/rest-api-design.md
   Error handling:     .agnostic-core/skills/backend/error-handling.md
   Seguranca de API:   .agnostic-core/skills/security/api-hardening.md
   OWASP checklist:    .agnostic-core/skills/security/owasp-checklist.md
   Banco de dados:     .agnostic-core/skills/database/query-compliance.md
   Schema design:      .agnostic-core/skills/database/schema-design.md
+  Migrations SQLite:  .agnostic-core/skills/database/migration-aplicada-nunca-se-edita.md
   Node.js patterns:   .agnostic-core/skills/nodejs/nodejs-patterns.md
-  Express setup:      .agnostic-core/skills/nodejs/express-best-practices.md
-  OpenAPI:            .agnostic-core/skills/documentation/openapi-swagger.md
 
-Frontend:
+Frontend (HTML/CSS/JS puro, sem framework nem build step):
   HTML e CSS:          .agnostic-core/skills/frontend/html-css-audit.md
   Acessibilidade:      .agnostic-core/skills/frontend/accessibility.md
   UX Guidelines:       .agnostic-core/skills/frontend/ux-guidelines.md
   CSS Governance:      .agnostic-core/skills/frontend/css-governance.md
-  Tailwind:            .agnostic-core/skills/frontend/tailwind-patterns.md
-  SEO:                 .agnostic-core/skills/frontend/seo-checklist.md
-  Design com MCP:      .agnostic-core/skills/design/paper-mcp-workflow.md
 
 Qualidade:
   Testes unitarios:    .agnostic-core/skills/testing/unit-testing.md
-  Testes integracao:   .agnostic-core/skills/testing/integration-testing.md
-  Testes E2E:          .agnostic-core/skills/testing/e2e-testing.md
   TDD workflow:        .agnostic-core/skills/testing/tdd-workflow.md
   Performance:         .agnostic-core/skills/performance/performance-audit.md
-  Caching:             .agnostic-core/skills/performance/caching-strategies.md
+  Cache (se preciso):  .agnostic-core/skills/cache/estrategias-de-cache.md
   Validacao:           .agnostic-core/skills/audit/validation-checklist.md
 
 Operacional:
   Commits:             .agnostic-core/skills/git/commit-conventions.md
   Branching:           .agnostic-core/skills/git/branching-strategy.md
   Deploy procedures:   .agnostic-core/skills/devops/deploy-procedures.md
+  Deploy script hardening: .agnostic-core/skills/devops/deploy-script-hardening.md
   Documentacao:        .agnostic-core/skills/documentation/technical-docs.md
   Fact checking:       .agnostic-core/skills/behavioral/fact-checker.md
   Debugging:           .agnostic-core/skills/audit/systematic-debugging.md
@@ -66,6 +61,7 @@ Reviewers:
   Security Reviewer:       .agnostic-core/agents/reviewers/security-reviewer.md
   Frontend Reviewer:       .agnostic-core/agents/reviewers/frontend-reviewer.md
   Code Inspector (SPARC):  .agnostic-core/agents/reviewers/code-inspector.md
+  Architecture Reviewer:   .agnostic-core/agents/reviewers/architecture-reviewer.md
   Test Reviewer:           .agnostic-core/agents/reviewers/test-reviewer.md
   Performance Reviewer:    .agnostic-core/agents/reviewers/performance-reviewer.md
   Codebase Mapper:         .agnostic-core/agents/reviewers/codebase-mapper.md
@@ -82,8 +78,6 @@ Generators:
 Specialists:
   DevOps Engineer:         .agnostic-core/agents/specialists/devops-engineer.md
   Database Architect:      .agnostic-core/agents/specialists/database-architect.md
-  Mobile Developer:        .agnostic-core/agents/specialists/mobile-developer.md
-  SEO Specialist:          .agnostic-core/agents/specialists/seo-specialist.md
 
 Workflows:
   Brainstorm:              .agnostic-core/commands/workflows/brainstorm.md
@@ -105,16 +99,16 @@ Git Auto-Push Workflow:
 
 ---
 
-Convencoes do projeto (preencher):
+Convencoes do projeto:
 
-  Backend: [LINGUAGEM] [VERSAO] + [FRAMEWORK] [VERSAO]
-  Frontend: [FRAMEWORK] [VERSAO]
-  Banco: [BANCO] [VERSAO] via [ORM/DRIVER]
-  Auth: JWT / OAuth / sessao
-  Cache: Redis / in-memory / nenhum
-  Testes: [FRAMEWORK DE TESTES]
-  CI/CD: GitHub Actions / outro
-  Deploy: [PLATAFORMA]
+  Backend: Node.js >=24, sem framework — node:http nativo (backend/src/server.js)
+  Frontend: HTML/CSS/JS puro, sem framework nem build step (frontend/)
+  Banco: SQLite nativo (node:sqlite / DatabaseSync) via backend/src/db.js
+  Auth: sessao por cookie HttpOnly + assinatura propria (backend/src/auth.js), com leitor biometrico (IDBIO SDK) integrado via backend/tools/idbio-bridge
+  Cache: nenhum
+  Testes: smoke test manual (backend/scripts/smoke-test.js), sem framework formal
+  CI/CD: nenhum configurado
+  Deploy: manual / on-prem (host local, sem pipeline)
   Estilo de commits: Conventional Commits
 
 ---
