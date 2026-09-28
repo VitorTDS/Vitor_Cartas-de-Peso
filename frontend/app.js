@@ -98,7 +98,7 @@ function lockView() {
   app.innerHTML = `
     <section class="lock-screen">
       <aside class="lock-users">
-        <div class="brand"><span class="mark">D</span><div><h1>Controle de Densidade</h1><small>Volume pela densidade</small></div></div>
+        <div class="brand"><span class="mark">CP</span><div><h1>CARTAS DE PESO</h1><small>Controle de densidade</small></div></div>
         <div class="login-info">
           <span class="eyebrow">Acesso protegido</span>
           <h2>Controle confiável do início ao fim.</h2>
@@ -222,7 +222,7 @@ function passwordChangeView() {
   app.innerHTML = `
     <section class="lock-screen password-change-screen">
       <aside class="lock-users">
-        <div class="brand"><span class="mark">D</span><div><h1>Controle de Densidade</h1><small>Proteção da conta</small></div></div>
+        <div class="brand"><span class="mark">CP</span><div><h1>CARTAS DE PESO</h1><small>Proteção da conta</small></div></div>
         <div class="login-info">
           <span class="eyebrow">Primeiro acesso</span>
           <h2>Crie uma senha somente sua.</h2>
@@ -389,50 +389,17 @@ function field(label, campo, type = 'text', step = '', readonly = false) {
   `;
 }
 
-function controleView() {
-  const cab = state.controle.cabecalho;
-  const admin = state.usuario?.perfil === 'administrador';
-  const tab = state.tab === 'usuarios' && !admin ? 'cartas' : state.tab;
-  app.innerHTML = `
-    <div class="app-shell">
-      <header class="topbar">
-        <div>
-          <h1>Controle de Densidade - Volume pela Densidade</h1>
-          <p>Frequencia: a cada ${fmt(cab.frequenciaMinutos, 0)} minutos, tolerancia de ${fmt(cab.toleranciaMinutos, 0)} minutos</p>
-        </div>
-        <div class="userbox">
-          <strong>${h(state.usuario?.nomeExibicao || state.usuario?.nome)}</strong>
-          <span id="saveStatus">Dados carregados</span>
-          <button class="secondary" id="logoutBtn" type="button">Sair</button>
-        </div>
-      </header>
-
-      <nav class="tabs" aria-label="Acoes internas">
-        <button type="button" class="${tab === 'cartas' ? 'active' : ''}" data-tab="cartas">Cartas</button>
-        ${admin ? `<button type="button" class="${tab === 'usuarios' ? 'active' : ''}" data-tab="usuarios">Usuários</button>` : ''}
-      </nav>
-
-      ${state.toast ? `<div class="toast">${h(state.toast)}</div>` : ''}
-
-      ${tab === 'cartas' ? cartasTab() : usuariosTab()}
-    </div>
-  `;
-  bindTela();
-  renderTabela();
-  renderStatus();
-}
-
-controleView = function controleViewSidebar() {
+const controleView = function controleViewSidebar() {
   const admin = state.usuario?.perfil === 'administrador';
   const tab = state.tab === 'usuarios' && !admin ? 'cartas' : state.tab;
   app.innerHTML = `
     <div class="app-shell split-shell">
       <aside class="internal-sidebar">
         <div class="internal-brand">
-          <span class="mark">D</span>
+          <span class="mark">CP</span>
           <div>
-            <h1>Controle de Densidade</h1>
-            <small>Sobral · Qualidade industrial</small>
+            <h1>CARTAS DE PESO</h1>
+            <small>Controle de densidade · Sobral</small>
           </div>
         </div>
         <div class="internal-user">
@@ -456,7 +423,7 @@ controleView = function controleViewSidebar() {
         <header class="workspace-header">
           <div>
             <span class="eyebrow">Controle de processo</span>
-            <h1>${tab === 'cartas' ? 'Cartas de peso' : 'Gestão de usuários'}</h1>
+            <h1>${tab === 'cartas' ? 'CARTAS DE PESO' : 'Gestão de usuários'}</h1>
             <p>${tab === 'cartas' ? `Acompanhamento de volume por densidade a cada ${fmt(state.controle.cabecalho.frequenciaMinutos, 0)} minutos.` : 'Cadastre e gerencie os acessos da equipe.'}</p>
           </div>
           <div class="workspace-date">${new Intl.DateTimeFormat('pt-BR', { dateStyle: 'long' }).format(new Date())}</div>
