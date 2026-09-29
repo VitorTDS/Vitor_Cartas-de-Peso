@@ -4,6 +4,7 @@ const path = require('node:path');
 const { URL } = require('node:url');
 const config = require('./config');
 const { migrate, all, get, run, auditar, db } = require('./db');
+const { gerarPlanilhaControleDensidade } = require('./xlsxExport');
 
 const publicDir = path.resolve(__dirname, '..', '..', 'frontend');
 
@@ -115,8 +116,14 @@ function controlePadrao() {
       lote: '260227',
       volumeDeclaradoMl: 200,
       variacaoPermitidaPercentual: 1,
-      densidadeDeclarada: 1.0126,
-      pesoEmbalagemPrimariaG: 26.07,
+      pesosEmbalagem1: Array.from({ length: 10 }, () => 0),
+      pesosEmbalagem2: Array.from({ length: 10 }, () => 0),
+      medicoesEmbalagem: [
+        { realizadoPor: '', data: '', hora: '' },
+        { realizadoPor: '', data: '', hora: '' },
+      ],
+      densidade1: 1.0126,
+      densidade2: 1.0126,
       minimoMl: 200,
       maximoMl: 202,
       maquinaTag: 'ECH-501013',
@@ -124,6 +131,8 @@ function controlePadrao() {
       tagBalanca: 'BAL-501004',
       frequenciaMinutos: 30,
       toleranciaMinutos: 10,
+      impressoPor: '',
+      conferidoPor: '',
     },
     verificacoes: [],
   };
@@ -136,16 +145,32 @@ function normalizarControle(body) {
     const parsed = Number(String(valor).replace(',', '.'));
     return Number.isFinite(parsed) ? parsed : fallback;
   };
+  const pesosDez = (valor) => Array.from({ length: 10 }, (_, index) => numero(valor?.[index], 0));
+  const media = (pesos) => pesos.reduce((soma, valor) => soma + valor, 0) / 10;
   const volumeDeclaradoMl = numero(cabecalho.volumeDeclaradoMl, atual.cabecalho.volumeDeclaradoMl);
   const variacaoPermitidaPercentual = numero(cabecalho.variacaoPermitidaPercentual, atual.cabecalho.variacaoPermitidaPercentual);
+  const pesosEmbalagem1 = pesosDez(cabecalho.pesosEmbalagem1);
+  const pesosEmbalagem2 = pesosDez(cabecalho.pesosEmbalagem2);
   return {
     cabecalho: {
       produto: texto(cabecalho, 'produto', false) || atual.cabecalho.produto,
       lote: texto(cabecalho, 'lote', false),
       volumeDeclaradoMl,
       variacaoPermitidaPercentual,
-      densidadeDeclarada: numero(cabecalho.densidadeDeclarada, atual.cabecalho.densidadeDeclarada),
-      pesoEmbalagemPrimariaG: numero(cabecalho.pesoEmbalagemPrimariaG, atual.cabecalho.pesoEmbalagemPrimariaG),
+      pesosEmbalagem1,
+      pesosEmbalagem2,
+      medicoesEmbalagem: [0, 1].map((index) => {
+        const item = Array.isArray(cabecalho.medicoesEmbalagem) ? cabecalho.medicoesEmbalagem[index] || {} : {};
+        return {
+          realizadoPor: texto(item, 'realizadoPor', false),
+          data: texto(item, 'data', false),
+          hora: texto(item, 'hora', false),
+        };
+      }),
+      mediaEmbalagem1: media(pesosEmbalagem1),
+      mediaEmbalagem2: media(pesosEmbalagem2),
+      densidade1: numero(cabecalho.densidade1, atual.cabecalho.densidade1),
+      densidade2: numero(cabecalho.densidade2, atual.cabecalho.densidade2),
       minimoMl: volumeDeclaradoMl,
       maximoMl: volumeDeclaradoMl * (1 + variacaoPermitidaPercentual / 100),
       maquinaTag: texto(cabecalho, 'maquinaTag', false),
@@ -153,13 +178,15 @@ function normalizarControle(body) {
       tagBalanca: texto(cabecalho, 'tagBalanca', false),
       frequenciaMinutos: numero(cabecalho.frequenciaMinutos, atual.cabecalho.frequenciaMinutos),
       toleranciaMinutos: numero(cabecalho.toleranciaMinutos, atual.cabecalho.toleranciaMinutos),
+      impressoPor: texto(cabecalho, 'impressoPor', false),
+      conferidoPor: texto(cabecalho, 'conferidoPor', false),
     },
-    verificacoes: Array.isArray(body.verificacoes) ? body.verificacoes.map((item) => ({
+    verificacoes: Array.isArray(body.verificacoes) ? body.verificacoes.slice(0, 13).map((item) => ({
       id: texto(item, 'id', false) || String(Date.now()),
       realizadoPor: texto(item, 'realizadoPor', false),
       data: texto(item, 'data', false),
       hora: texto(item, 'hora', false),
-      pesos: Array.from({ length: 10 }, (_, index) => numero(item.pesos?.[index], 0)),
+      pesos: pesosDez(item.pesos),
     })) : [],
   };
 }
@@ -224,6 +251,25 @@ async function api(req, res) {
       auditar(usuario, 'controle_densidade', 1, 'salvou', anterior, dados);
       return json(res, 200, carregarControle());
     }
+  }
+
+  if (method === 'GET' && pathName === '/api/controle-densidade/exportacao') {
+    if (url.searchParams.get('formato') !== 'xlsx') {
+      return erro(res, 400, 'INVALID_REQUEST', 'Informe formato=xlsx.');
+    }
+    const dados = carregarControle();
+    const buffer = await gerarPlanilhaControleDensidade(dados);
+    const lote = (dados.cabecalho.lote || 'sem-lote')
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase();
+    const nomeArquivo = `controle-densidade_${lote || 'sem-lote'}.xlsx`;
+    res.writeHead(200, {
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="${nomeArquivo}"`,
+      'Cache-Control': 'no-store',
+      ...securityHeaders(),
+    });
+    return res.end(buffer);
   }
 
   return erro(res, 404, 'NOT_FOUND', 'Modulo indisponivel nesta versao. Use o Controle de Densidade.');

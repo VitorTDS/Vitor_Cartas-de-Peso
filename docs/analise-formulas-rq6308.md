@@ -139,6 +139,10 @@ Os campos limpos na duplicação são `A6`, `E6`, `J6`, `O6`, `N8`, `O8`, `B11:P
 
 ## Diferenças em relação ao sistema atual
 
+> **Status:** fidelidade integral implementada em 2026-09-29 (`backend/src/server.js`,
+> `frontend/app.js`, `backend/src/xlsxExport.js`). A tabela abaixo descreve o estado
+> **antes** da implementação; mantida como registro da decisão.
+
 O cálculo atual do sistema usa a média dos pesos brutos dividida diretamente pela densidade declarada. Isso não reproduz a planilha porque não desconta a tara da embalagem antes da divisão.
 
 | Tema | Planilha | Sistema atual | Alteração necessária |
