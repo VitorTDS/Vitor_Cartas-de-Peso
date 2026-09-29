@@ -42,18 +42,25 @@ identidade repassada por ele.
 
 ## Modulo Principal
 
-A tela unica do sistema e o modulo **Controle de Densidade - Volume pela Densidade**.
+A tela unica do sistema e a **carta de peso RQ 6308 — Volume pela Densidade**,
+exibida exatamente como a planilha oficial (layout extraido do `.xlsm` por
+`backend/tools/extrair-layout-rq6308.py` para `frontend/rq6308-layout.js`).
 
-Recursos implementados:
+Como funciona:
 
-- Cabecalho editavel com produto, lote, volume declarado, variacao permitida, densidade, peso da embalagem primaria, minimo/maximo, maquina, linha, balanca, frequencia e tolerancia.
-- Tabela de pesagens com colunas dinamicas por verificacao.
-- Cada verificacao registra realizado por, data, hora e 10 pesos.
-- Calculo automatico em tempo real de media, densidade e MEDIA (mL).
-- Edicao manual de qualquer peso com recalculo imediato.
-- Formatacao condicional em vermelho para densidade ou volume fora da faixa permitida.
-- Persistencia no SQLite pela tabela `controle_densidade`.
-- Exportacao em CSV e Excel (`.xls`).
+- **Produtos** (`produtos_carta`): cadastro carregado de `backend/src/seeds/produtos.json`
+  (66 produtos). Cada produto tem um **modelo de carta** (RQ/revisao, volume declarado,
+  variacao, maquina, linha, balanca, frequencia). Produto sem modelo aparece como
+  "modelo pendente" e ainda nao abre carta. Hoje so o 1101 (AGUALEMA SOBRAL 100 ML) tem modelo.
+- **Cartas** (`cartas_peso`): a cada producao abre-se uma carta nova do produto, com o
+  cabecalho do modelo; o operador informa o **lote** e faz toda a pesagem (taras ME1/ME2,
+  densidades, 13 verificacoes, impresso/conferido). O preenchimento e salvo automaticamente.
+- **Salvar carta** finaliza: a carta vai para o **historico do produto** e fica **imutavel**
+  (a API recusa alteracao e triggers no SQLite bloqueiam `UPDATE`/`DELETE`). Uma carta nova,
+  em branco, e aberta em seguida. Uma carta aberta por produto por vez.
+- Historico por produto, com visualizacao somente leitura e exportacao em CSV e Excel (`.xlsx`).
+- Toda gravacao fica registrada na tabela `auditoria` (antes/depois).
+- A antiga tabela `controle_densidade` (carta unica de teste) foi mantida intacta.
 
 ## Variaveis
 

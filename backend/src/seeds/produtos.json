@@ -1,0 +1,269 @@
+{
+  "origem": "p:/VITOR/produtos.xlsx (enviado pelo usuário em 2026-09-29)",
+  "produtos": [
+    {
+      "codigo": "1017",
+      "nome": "XAROPVITAN IMUNO 100 ML COMERCIAL"
+    },
+    {
+      "codigo": "1016",
+      "nome": "DOSEVIT D 20 ML COMERCIAL"
+    },
+    {
+      "codigo": "1018",
+      "nome": "SOBRALVIT D KIDS 20 ML COMERCIAL"
+    },
+    {
+      "codigo": "1019",
+      "nome": "INGLESA - QUINA SOBRAL 430 ML COMERCIAL"
+    },
+    {
+      "codigo": "1025",
+      "nome": "PROPZINCO XAROPE 100 ML COMERCIAL"
+    },
+    {
+      "codigo": "1060",
+      "nome": "AMARGOFIG 120 ML"
+    },
+    {
+      "codigo": "1074",
+      "nome": "MAGNESIA SOBRAL HORTELA 100 ML"
+    },
+    {
+      "codigo": "1089",
+      "nome": "THEOGORICO B6 GOTAS 30 ML"
+    },
+    {
+      "codigo": "1090",
+      "nome": "MANAFIBRAS KIDS 30 ML"
+    },
+    {
+      "codigo": "1092",
+      "nome": "EXTRATO DE PRÓPOLIS VERDE 30% SOBRAL GOTAS 20 ML"
+    },
+    {
+      "codigo": "1093",
+      "nome": "THEOGORICO B6 GOTAS 30 ML - DUZIA"
+    },
+    {
+      "codigo": "1096",
+      "nome": "CALCIOLAX B12 240 ML"
+    },
+    {
+      "codigo": "1097",
+      "nome": "CALCIOLAX D3 240 ML"
+    },
+    {
+      "codigo": "1098",
+      "nome": "CALCIOLAX KIDS 240 ML"
+    },
+    {
+      "codigo": "1107",
+      "nome": "SORALYT TRADICIONAL 450 ML"
+    },
+    {
+      "codigo": "1108",
+      "nome": "SORALYT SABOR COCO 450 ML"
+    },
+    {
+      "codigo": "1109",
+      "nome": "SORALYT SABOR GUARANÁ 450 ML"
+    },
+    {
+      "codigo": "1110",
+      "nome": "SORALYT SABOR MAÇÃ 450 ML"
+    },
+    {
+      "codigo": "1111",
+      "nome": "SORALYT SABOR UVA 450 ML"
+    },
+    {
+      "codigo": "1112",
+      "nome": "SORALYT SABOR MORANGO 450 ML"
+    },
+    {
+      "codigo": "1113",
+      "nome": "SORALYT SABOR LARANJA 450 ML"
+    },
+    {
+      "codigo": "1100",
+      "nome": "AGUALEMA SOBRAL 30 ML"
+    },
+    {
+      "codigo": "1101",
+      "nome": "AGUALEMA SOBRAL 100 ML"
+    },
+    {
+      "codigo": "1102",
+      "nome": "AGUALEMA SOBRAL 200 ML"
+    },
+    {
+      "codigo": "1103",
+      "nome": "PROPZINCO SPRAY SABOR GENGIBRE 30 ML"
+    },
+    {
+      "codigo": "1104",
+      "nome": "PROPZINCO SPRAY SABOR MEL 30 ML"
+    },
+    {
+      "codigo": "1121",
+      "nome": "LAXDOSE KIDS SOBRAL 120 ML"
+    },
+    {
+      "codigo": "1127",
+      "nome": "MAGNESIA SOBRAL TRADICIONAL 300 ML"
+    },
+    {
+      "codigo": "1070",
+      "nome": "MOVIMEX CT 3 BL X 10 COMPRIMIDOS"
+    },
+    {
+      "codigo": "1076",
+      "nome": "OLEO DE AMENDOAS DOCE SOBRAL 100% PURO 30 ML"
+    },
+    {
+      "codigo": "1077",
+      "nome": "OLEO DE AMENDOAS DOCE SOBRAL 100% PURO 50 ML"
+    },
+    {
+      "codigo": "1079",
+      "nome": "OLEO DE ROSA MOSQUETA SOBRAL 100% PURO 30 ML"
+    },
+    {
+      "codigo": "1082",
+      "nome": "OLEO DE COCO SOBRAL 100% PURO 50 ML"
+    },
+    {
+      "codigo": "1083",
+      "nome": "OLEO DE RICINO SOBRAL 100% PURO 30 ML"
+    },
+    {
+      "codigo": "1084",
+      "nome": "OLEO DE RICINO SOBRAL 100% PURO 50 ML"
+    },
+    {
+      "codigo": "1095",
+      "nome": "OLEO DE ROSA MOSQUETA SOBRAL 100% PURO SPRAY 30 ML"
+    },
+    {
+      "codigo": "1099",
+      "nome": "TINTURA DE ARNICA SOBRAL 30 ML"
+    },
+    {
+      "codigo": "1115",
+      "nome": "OLEO DE ABACATE SOBRAL 100% PURO 50 ML"
+    },
+    {
+      "codigo": "1116",
+      "nome": "OLEO DE ARGAN SOBRAL 50 ML"
+    },
+    {
+      "codigo": "1117",
+      "nome": "OLEO DE KARITE SOBRAL 50 ML"
+    },
+    {
+      "codigo": "1122",
+      "nome": "OLEO DE ROSA MOSQUETA SOBRAL 100% PURO GOTAS 30 ML"
+    },
+    {
+      "codigo": "1129",
+      "nome": "GLICERINA SOBRAL 100 ML"
+    },
+    {
+      "codigo": "1128",
+      "nome": "OLEO DE SEMENTE DE UVA SOBRAL 100% PURO 50 ML"
+    },
+    {
+      "codigo": "1069",
+      "nome": "MAGNESIA SOBRAL TRADICIONAL 100 ML"
+    },
+    {
+      "codigo": "1105",
+      "nome": "PROPZINCO SPRAY SABOR MENTA 30 ML"
+    },
+    {
+      "codigo": "1106",
+      "nome": "PROPZINCO SPRAY SABOR ROMA 30 ML"
+    },
+    {
+      "codigo": "1120",
+      "nome": "LAXDOSE SOBRAL 120 ML"
+    },
+    {
+      "codigo": "1123",
+      "nome": "CALCIOLAX ARTICULE CT 6 BL X 10 COMPRIMIDOS"
+    },
+    {
+      "codigo": "1124",
+      "nome": "CALCIOLAX FIXA CT 9 BL X 10 COMPRIMIDOS"
+    },
+    {
+      "codigo": "1132",
+      "nome": "MOVIMEX CT 6 BL X 10 COMPRIMIDOS"
+    },
+    {
+      "codigo": "1075",
+      "nome": "OLEO DE COPAIBA SOBRAL 100% PURO 30 ML"
+    },
+    {
+      "codigo": "1078",
+      "nome": "OLEO DE GIRASSOL SOBRAL 100% PURO 50 ML"
+    },
+    {
+      "codigo": "1134",
+      "nome": "OLEO DE ALECRIM SOBRAL 50 ML"
+    },
+    {
+      "codigo": "1081",
+      "nome": "OLEO DE BABOSA SOBRAL 100% NATURAL 30 ML"
+    },
+    {
+      "codigo": "1130",
+      "nome": "OLEO DE BABOSA SOBRAL 100% NATURAL 50 ML"
+    },
+    {
+      "codigo": "1125",
+      "nome": "OLEO DE GIRASSOL AGE SOBRAL 100 ML"
+    },
+    {
+      "codigo": "1126",
+      "nome": "OLEO DE GIRASSOL AGE SOBRAL 200 ML"
+    },
+    {
+      "codigo": "1136",
+      "nome": "OLEO DE ROSA MOSQUETA RUBIGINOSA SOBRAL 100% PURO SPRAY 30 ML"
+    },
+    {
+      "codigo": "1133",
+      "nome": "VITAMINA D SOBRAL 20 ML"
+    },
+    {
+      "codigo": "1135",
+      "nome": "VITAMINA D 7MESES SOBRAL 20 ML"
+    },
+    {
+      "codigo": "1137",
+      "nome": "OLEO DE ROSA MOSQUETA RUBIGINOSA SOBRAL 100% PURO GOTAS 30 ML"
+    },
+    {
+      "codigo": "1141",
+      "nome": "GLICERINA COM ALOE VERA SOBRAL 100 ML"
+    },
+    {
+      "codigo": "1139",
+      "nome": "ROSAS SOBRAL 100 ML"
+    },
+    {
+      "codigo": "1140",
+      "nome": "ROSAS SOBRAL 180 ML"
+    },
+    {
+      "codigo": "1143",
+      "nome": "PASTA D'ÁGUA TRADICIONAL SOBRAL 100 G"
+    },
+    {
+      "codigo": "1144",
+      "nome": "PASTA D'ÁGUA MENTOLADA SOBRAL 100 G"
+    }
+  ]
+}

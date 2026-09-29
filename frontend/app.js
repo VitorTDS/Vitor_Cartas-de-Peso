@@ -3,12 +3,28 @@ const LAYOUT = window.RQ6308_LAYOUT;
 
 const state = {
   usuario: null,
-  controle: null,
+  produtos: [],
+  produtoId: null,
+  cartaAberta: null, // carta em preenchimento do produto (rascunho com autosave)
+  controle: null, // carta exibida: a aberta ou uma do histórico (somente leitura)
+  somenteLeitura: false,
+  historico: null, // lista de cartas salvas quando o painel de histórico está aberto
+  confirmandoSalvar: false,
   saving: false,
   toast: '',
   saveTimer: null,
   observadorZoom: null,
 };
+
+const PRODUTO_PADRAO = '1101'; // AGUALEMA SOBRAL 100 ML: primeiro produto em testes
+
+function lerPreferencia(chave) {
+  try { return localStorage.getItem(chave); } catch { return null; }
+}
+
+function gravarPreferencia(chave, valor) {
+  try { localStorage.setItem(chave, valor); } catch { /* navegação privada etc. */ }
+}
 
 const h = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
   '&': '&amp;',
@@ -59,8 +75,35 @@ function setToast(message) {
   }, 2600);
 }
 
-async function carregarControle() {
-  state.controle = await api('/api/controle-densidade');
+function produtoAtual() {
+  return state.produtos.find((p) => p.id === state.produtoId) || null;
+}
+
+async function carregarProdutos() {
+  state.produtos = (await api('/api/produtos')).data;
+}
+
+// Abre a carta em preenchimento do produto; se não houver, cria uma nova a
+// partir do modelo do produto. Produto sem modelo fica sem carta.
+async function abrirProduto(produtoId) {
+  await salvarPendente();
+  state.produtoId = produtoId;
+  state.historico = null;
+  state.somenteLeitura = false;
+  state.cartaAberta = null;
+  state.controle = null;
+  const produto = produtoAtual();
+  if (produto) gravarPreferencia('produtoCodigo', produto.codigo);
+  if (produto?.modeloPronto) {
+    try {
+      state.cartaAberta = await api(`/api/produtos/${produtoId}/carta-aberta`);
+    } catch (err) {
+      if (err.status !== 404) throw err;
+      state.cartaAberta = await api(`/api/produtos/${produtoId}/cartas`, { method: 'POST' });
+    }
+    state.controle = state.cartaAberta;
+  }
+  render();
 }
 
 function salvarDepois() {
@@ -68,24 +111,73 @@ function salvarDepois() {
   state.saveTimer = setTimeout(salvarAgora, 500);
 }
 
+async function salvarPendente() {
+  if (state.saveTimer) await salvarAgora();
+}
+
+// Sempre grava a carta aberta (nunca a do histórico que esteja em exibição).
 async function salvarAgora() {
   clearTimeout(state.saveTimer);
+  state.saveTimer = null;
+  const carta = state.cartaAberta;
+  if (!carta) return;
   state.saving = true;
   renderStatus();
   try {
-    // Não substitui state.controle pela resposta: o usuário pode ter digitado
-    // mais algo enquanto a requisição estava em voo.
-    const salvo = await api('/api/controle-densidade', {
-      method: 'PUT',
-      body: JSON.stringify(state.controle),
-    });
-    state.controle.atualizadoEm = salvo.atualizadoEm;
+    // Não substitui a carta pela resposta: o usuário pode ter digitado mais
+    // algo enquanto a requisição estava em voo.
+    const salvo = await api(`/api/cartas/${carta.id}`, { method: 'PUT', body: JSON.stringify(carta) });
+    carta.atualizadoEm = salvo.atualizadoEm;
   } catch (err) {
     setToast(err.message);
   } finally {
     state.saving = false;
     renderStatus();
   }
+}
+
+async function finalizarCarta() {
+  const carta = state.cartaAberta;
+  clearTimeout(state.saveTimer);
+  state.saveTimer = null;
+  try {
+    await api(`/api/cartas/${carta.id}/finalizacao`, { method: 'POST', body: JSON.stringify(carta) });
+  } catch (err) {
+    state.confirmandoSalvar = false;
+    render();
+    setToast(err.message);
+    return;
+  }
+  state.confirmandoSalvar = false;
+  await carregarProdutos();
+  await abrirProduto(state.produtoId); // já abre a carta nova, em branco, da próxima produção
+  setToast(`Carta do lote ${carta.cabecalho.lote} salva no histórico. Carta nova aberta.`);
+}
+
+async function abrirHistorico() {
+  await salvarPendente();
+  state.historico = (await api(`/api/produtos/${state.produtoId}/cartas?status=finalizada`)).data;
+  render();
+}
+
+async function verCartaSalva(id) {
+  state.controle = await api(`/api/cartas/${id}`);
+  state.somenteLeitura = true;
+  state.historico = null;
+  render();
+}
+
+function voltarCartaAtual() {
+  state.controle = state.cartaAberta;
+  state.somenteLeitura = false;
+  state.historico = null;
+  render();
+}
+
+function dataHoraLocal(utc) {
+  if (!utc) return '';
+  const d = new Date(`${utc.replace(' ', 'T')}Z`);
+  return Number.isNaN(d.getTime()) ? utc : d.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
 }
 
 function mediaDez(pesos) {
@@ -97,9 +189,9 @@ function calculos(verificacao) {
   const informados = pesos.filter((value) => value > 0);
   const media = informados.length ? informados.reduce((sum, value) => sum + value, 0) / informados.length : 0;
   const cab = state.controle.cabecalho;
-  const densidade2 = parseNumero(cab.densidade2);
-  const tara2 = mediaDez(cab.pesosEmbalagem2);
-  const volumes = pesos.map((peso) => (peso > 0 && densidade2 > 0 ? (peso - tara2) / densidade2 : null));
+  const densidade = parseNumero(cab.densidadeProdutoGml); // H7
+  const pesoEmbalagem = parseNumero(cab.pesoEmbPrimariaG); // H8
+  const volumes = pesos.map((peso) => (peso > 0 && densidade > 0 ? (peso - pesoEmbalagem) / densidade : null));
   const validos = volumes.filter((value) => value !== null);
   const volume = validos.length ? validos.reduce((sum, value) => sum + value, 0) / validos.length : 0;
   return {
@@ -138,13 +230,14 @@ LAYOUT.merges.forEach((m) => {
 });
 
 const CAMPOS_CABECALHO = {
-  A6: ['produto', 'texto'],
+  // O terceiro item marca campos fixos do produto: aparecem, mas não se editam na carta.
+  A6: ['produto', 'texto', true],
   E6: ['lote', 'texto'],
-  F6: ['volumeDeclaradoMl', 'numero'],
-  J6: ['variacaoPermitidaPercentual', 'numero'],
-  O6: ['maquinaTag', 'texto'],
-  N8: ['linha', 'texto'],
-  O8: ['tagBalanca', 'texto'],
+  F6: ['volumeDeclaradoMl', 'numero', true],
+  J6: ['variacaoPermitidaPercentual', 'numero', true],
+  O6: ['maquinaTag', 'texto', true],
+  N8: ['linha', 'texto', true],
+  O8: ['tagBalanca', 'texto', true],
   B26: ['densidade1', 'numero'],
   C26: ['densidade2', 'numero'],
   E52: ['impressoPor', 'texto'],
@@ -172,8 +265,8 @@ function vinculo(c, r) {
   const a = endereco(c, r);
   const cab = () => state.controle.cabecalho;
   if (CAMPOS_CABECALHO[a]) {
-    const [campo, tipo] = CAMPOS_CABECALHO[a];
-    return { tipo, ler: () => cab()[campo], gravar: (v) => { cab()[campo] = v; } };
+    const [campo, tipo, fixo = false] = CAMPOS_CABECALHO[a];
+    return { tipo, fixo, ler: () => cab()[campo], gravar: (v) => { cab()[campo] = v; } };
   }
   if ((c === 2 || c === 3) && CAMPOS_META[r]) {
     const [campo, tipo] = CAMPOS_META[r];
@@ -300,7 +393,11 @@ function avaliar() {
   const variacao = parseNumero(cab.variacaoPermitidaPercentual);
   const minimo = declarado; // L7 =F6
   const maximo = declarado + (variacao * declarado / 100); // L8 =F6+(J6*F6/100)
-  const valores = { H7: densidade2, H8: tara2, L7: minimo, L8: maximo, B25: tara1, C25: tara2 };
+  // H7/H8: no modelo em branco são =C26/=C25; na produção vêm especificados por
+  // produto (decisão do usuário, 2026-09-29) e são eles que entram no volume.
+  const densidade = parseNumero(cab.densidadeProdutoGml);
+  const pesoEmbalagem = parseNumero(cab.pesoEmbPrimariaG);
+  const valores = { H7: densidade, H8: pesoEmbalagem, L7: minimo, L8: maximo, B25: tara1, C25: tara2 };
   const medias = [];
   for (let i = 0; i < TOTAL_VERIFICACOES; i += 1) {
     const col = letra(COL_VERIF_INICIO + i);
@@ -309,7 +406,7 @@ function avaliar() {
     const volumes = [];
     for (let j = 0; j < 10; j += 1) {
       const peso = parseNumero(verificacao?.pesos?.[j]);
-      const volume = peso > 0 && densidade2 > 0 ? (peso - tara2) / densidade2 : ''; // =(D15-$H$8)/$H$7
+      const volume = peso > 0 && densidade > 0 ? (peso - pesoEmbalagem) / densidade : ''; // =(D15-$H$8)/$H$7
       valores[`${col}${31 + j}`] = volume;
       if (volume !== '') volumes.push(volume);
     }
@@ -486,6 +583,10 @@ function criarInput(td, c, r, vinc) {
   td.append(input);
 }
 
+function codigoRegistro(cab) {
+  return `RQ ${cab.rqNumero} REV ${cab.rqRevisao}`;
+}
+
 function moverFoco(c, r, direcao) {
   for (let y = r + direcao; y >= 1 && y <= LAYOUT.linhas.length; y += direcao) {
     const alvo = document.querySelector(`.xls-input[data-addr="${endereco(c, y)}"]`);
@@ -558,11 +659,15 @@ function montarPlanilha(host) {
         if (cor) td.style.color = cor;
       }
 
-      if (vinc) {
+      if (vinc && !vinc.fixo && !state.somenteLeitura) {
         criarInput(td, c, r, vinc);
+      } else if (vinc) {
+        td.textContent = textoExibicao(vinc, celula.fmt);
       } else if (celula.f) {
         td.dataset.formula = a;
         td.textContent = textoFormula(a, ctx);
+      } else if (a === 'N1') {
+        td.textContent = codigoRegistro(state.controle.cabecalho);
       } else if (a === 'A7') {
         td.dataset.frequencia = 'true';
         td.textContent = textoFrequencia();
@@ -619,18 +724,18 @@ function observarLargura(host, area) {
   state.observadorZoom?.disconnect();
   const larguraNatural = area.offsetWidth;
   let quadro = 0;
-  const ajustar = () => {
-    cancelAnimationFrame(quadro);
-    quadro = requestAnimationFrame(() => {
-      const disponivel = host.clientWidth;
-      if (!disponivel) return;
-      const zoom = Math.min(ZOOM_MAXIMO, Math.max(ZOOM_MINIMO, Math.floor((disponivel / larguraNatural) * 1000) / 1000));
-      area.style.zoom = String(zoom);
-    });
+  const aplicar = () => {
+    const disponivel = host.clientWidth;
+    if (!disponivel) return;
+    const zoom = Math.min(ZOOM_MAXIMO, Math.max(ZOOM_MINIMO, Math.floor((disponivel / larguraNatural) * 1000) / 1000));
+    area.style.zoom = String(zoom);
   };
-  state.observadorZoom = new ResizeObserver(ajustar);
+  state.observadorZoom = new ResizeObserver(() => {
+    cancelAnimationFrame(quadro);
+    quadro = requestAnimationFrame(aplicar);
+  });
   state.observadorZoom.observe(host);
-  ajustar();
+  aplicar(); // já no primeiro render (rAF não roda em aba em segundo plano)
 }
 
 function atualizarFormulas() {
@@ -773,9 +878,157 @@ function renderToast() {
   toast.hidden = !state.toast;
 }
 
-function render() {
+function opcoesProduto() {
+  return state.produtos.map((p) => `
+    <option value="${p.id}" ${p.id === state.produtoId ? 'selected' : ''}>
+      ${h(p.codigo)} — ${h(p.nome)}${p.modeloPronto ? '' : ' (modelo pendente)'}
+    </option>`).join('');
+}
+
+function verificacoesPreenchidas(carta) {
+  return carta.verificacoes.filter((v) => !verificacaoVazia(v)).length;
+}
+
+function barraFerramentas() {
+  const produto = produtoAtual();
+  const editando = Boolean(state.controle) && !state.somenteLeitura && !state.historico;
+  const botoes = [];
+  if (state.somenteLeitura || state.historico) {
+    botoes.push('<button class="secondary" id="voltarBtn" type="button">← Voltar à carta atual</button>');
+  }
+  if (produto) {
+    botoes.push(`<button class="secondary" id="historicoBtn" type="button">Histórico (${produto.totalSalvas})</button>`);
+  }
+  if (state.controle && !state.historico) {
+    botoes.push('<button class="secondary" id="csvBtn" type="button">Baixar CSV</button>');
+    botoes.push('<button class="secondary" id="excelBtn" type="button">Baixar Excel</button>');
+  }
+  if (editando) {
+    botoes.push('<button class="secondary" id="addColumnBtn" type="button">+ Nova verificação</button>');
+    botoes.push('<button id="salvarCartaBtn" type="button">Salvar carta</button>');
+  }
+  return `
+    <div class="xls-toolbar">
+      <label class="seletor-produto">
+        <span>Produto</span>
+        <select id="produtoSelect">${opcoesProduto()}</select>
+      </label>
+      <div class="actions">${botoes.join('')}</div>
+    </div>`;
+}
+
+function conteudoPrincipal() {
+  const produto = produtoAtual();
+  if (!produto) return '<p class="aviso-painel">Selecione um produto.</p>';
+
+  if (state.historico) {
+    const linhas = state.historico.map((c) => `
+      <tr>
+        <td>${h(dataHoraLocal(c.finalizadaEm))}</td>
+        <td><strong>${h(c.lote)}</strong></td>
+        <td>${c.verificacoesPreenchidas}</td>
+        <td class="${c.foraDaFaixa ? 'situacao-fora' : 'situacao-ok'}">${c.foraDaFaixa ? 'Fora da faixa' : 'Conforme'}</td>
+        <td><button class="secondary" type="button" data-abrir-carta="${c.id}">Abrir</button></td>
+      </tr>`).join('');
+    return `
+      <section class="painel-historico" aria-labelledby="tituloHistorico">
+        <h2 id="tituloHistorico">Histórico de cartas — ${h(produto.codigo)} ${h(produto.nome)}</h2>
+        ${state.historico.length ? `
+          <table class="tabela-historico">
+            <thead><tr><th>Salva em</th><th>Lote</th><th>Verificações</th><th>Situação</th><th></th></tr></thead>
+            <tbody>${linhas}</tbody>
+          </table>` : '<p class="aviso-painel">Nenhuma carta salva ainda para este produto.</p>'}
+      </section>`;
+  }
+
   if (!state.controle) {
-    app.innerHTML = '<main class="loading">Carregando controle...</main>';
+    return `
+      <section class="painel-pendente">
+        <h2>${h(produto.codigo)} — ${h(produto.nome)}</h2>
+        <p>O modelo da carta de peso deste produto ainda não foi cadastrado.</p>
+        <p>O espaço e o histórico dele já estão reservados no sistema. Assim que o modelo for cadastrado,
+        as cartas de peso deste produto poderão ser preenchidas aqui.</p>
+      </section>`;
+  }
+
+  const cab = state.controle.cabecalho;
+  const faixa = state.somenteLeitura
+    ? `<div class="faixa-carta somente-leitura">Carta salva em ${h(dataHoraLocal(state.controle.finalizadaEm))} — lote <strong>${h(cab.lote)}</strong> — somente leitura</div>`
+    : `<div class="faixa-carta">Carta em preenchimento${cab.lote ? ` — lote <strong>${h(cab.lote)}</strong>` : ' — informe o lote na célula E6'} · salva automaticamente enquanto você digita</div>`;
+  return `
+    ${faixa}
+    <div class="xls-janela">
+      <div class="xls-wrap" id="planilha"></div>
+      <div class="xls-abas"><span class="xls-aba ativa">${h(LAYOUT.aba.replace(/\s*\(\d+\)$/, ''))}</span></div>
+    </div>`;
+}
+
+function caixaConfirmacao() {
+  if (!state.confirmandoSalvar) return '';
+  const cab = state.cartaAberta.cabecalho;
+  return `
+    <div class="confirmacao" role="dialog" aria-modal="true" aria-labelledby="tituloConfirmacao">
+      <div class="confirmacao-caixa">
+        <h2 id="tituloConfirmacao">Salvar a carta de peso?</h2>
+        <dl>
+          <dt>Produto</dt><dd>${h(produtoAtual().codigo)} — ${h(cab.produto)}</dd>
+          <dt>Lote</dt><dd>${h(cab.lote)}</dd>
+          <dt>Verificações preenchidas</dt><dd>${verificacoesPreenchidas(state.cartaAberta)} de ${TOTAL_VERIFICACOES}</dd>
+        </dl>
+        <p>Depois de salva, a carta vai para o histórico do produto e <strong>não poderá mais ser alterada</strong>.
+        Uma carta nova, em branco, será aberta para a próxima produção.</p>
+        <div class="actions">
+          <button class="secondary" id="cancelarSalvarBtn" type="button">Cancelar</button>
+          <button id="confirmarSalvarBtn" type="button">Salvar carta</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function pedirConfirmacaoSalvar() {
+  if (!String(state.cartaAberta.cabecalho.lote || '').trim()) {
+    setToast('Informe o lote (célula E6) antes de salvar a carta.');
+    document.querySelector('.xls-input[data-addr="E6"]')?.focus();
+    return;
+  }
+  state.confirmandoSalvar = true;
+  render();
+  document.querySelector('#confirmarSalvarBtn')?.focus();
+}
+
+function ligarEventos() {
+  const on = (seletor, evento, fn) => document.querySelector(seletor)?.addEventListener(evento, fn);
+  const comErro = (fn) => async (...args) => {
+    try { await fn(...args); } catch (err) { setToast(err.message); }
+  };
+  on('#produtoSelect', 'change', comErro((e) => abrirProduto(Number(e.target.value))));
+  on('#historicoBtn', 'click', comErro(abrirHistorico));
+  on('#voltarBtn', 'click', voltarCartaAtual);
+  on('#addColumnBtn', 'click', novaVerificacao);
+  on('#salvarCartaBtn', 'click', pedirConfirmacaoSalvar);
+  on('#csvBtn', 'click', exportarCsv);
+  on('#excelBtn', 'click', exportarExcel);
+  on('#cancelarSalvarBtn', 'click', () => { state.confirmandoSalvar = false; render(); });
+  on('#confirmarSalvarBtn', 'click', comErro(async (e) => {
+    e.currentTarget.disabled = true;
+    await finalizarCarta();
+  }));
+  document.querySelectorAll('[data-abrir-carta]').forEach((botao) => {
+    botao.addEventListener('click', comErro(() => verCartaSalva(Number(botao.dataset.abrirCarta))));
+  });
+  if (state.confirmandoSalvar) {
+    document.addEventListener('keydown', function fecharComEsc(event) {
+      if (event.key !== 'Escape' || !state.confirmandoSalvar) return;
+      document.removeEventListener('keydown', fecharComEsc);
+      state.confirmandoSalvar = false;
+      render();
+    });
+  }
+}
+
+function render() {
+  if (!state.produtos.length) {
+    app.innerHTML = '<main class="loading">Carregando produtos...</main>';
     return;
   }
   app.innerHTML = `
@@ -797,26 +1050,20 @@ function render() {
         </div>
       </aside>
       <main class="internal-main xls-main">
-        <div class="xls-toolbar">
-          <strong>RQ 6308 REV 03 — Volume pela Densidade</strong>
-          <div class="actions">
-            <button class="secondary" id="csvBtn" type="button">Baixar CSV</button>
-            <button class="secondary" id="excelBtn" type="button">Baixar Excel</button>
-            <button id="addColumnBtn" type="button">+ Nova verificação</button>
-          </div>
-        </div>
+        ${barraFerramentas()}
         <div class="toast" id="toast" role="status" ${state.toast ? '' : 'hidden'}>${h(state.toast)}</div>
-        <div class="xls-janela">
-          <div class="xls-wrap" id="planilha"></div>
-          <div class="xls-abas"><span class="xls-aba ativa">${h(LAYOUT.aba.replace(/\s*\(\d+\)$/, ''))}</span></div>
-        </div>
+        ${conteudoPrincipal()}
       </main>
     </div>
+    ${caixaConfirmacao()}
   `;
-  montarPlanilha(document.querySelector('#planilha'));
-  document.querySelector('#addColumnBtn').addEventListener('click', novaVerificacao);
-  document.querySelector('#csvBtn').addEventListener('click', exportarCsv);
-  document.querySelector('#excelBtn').addEventListener('click', exportarExcel);
+  const host = document.querySelector('#planilha');
+  if (host) {
+    montarPlanilha(host);
+  } else {
+    state.observadorZoom?.disconnect();
+  }
+  ligarEventos();
   renderStatus();
 }
 
@@ -826,14 +1073,17 @@ function linhasExportacao() {
   const cab = state.controle.cabecalho;
   const cols = state.controle.verificacoes;
   return [
+    ['Registro de qualidade', `RQ ${cab.rqNumero} REV ${cab.rqRevisao}`],
     ['Produto', cab.produto],
     ['Lote', cab.lote],
     ['Volume declarado (mL)', cab.volumeDeclaradoMl],
     ['Variação permitida (%)', cab.variacaoPermitidaPercentual],
+    ['Densidade (g/mL) — especificação do produto (usada no cálculo)', cab.densidadeProdutoGml],
+    ['Peso Emb. Primária (g) — especificação do produto (usado no cálculo)', cab.pesoEmbPrimariaG],
     ['Densidade (g/mL) — medição 1', cab.densidade1],
-    ['Densidade (g/mL) — medição 2 (usada no cálculo)', cab.densidade2],
-    ['Peso Emb. Primária (g) — média medição 1', mediaDez(cab.pesosEmbalagem1)],
-    ['Peso Emb. Primária (g) — média medição 2 (usada no cálculo)', mediaDez(cab.pesosEmbalagem2)],
+    ['Densidade (g/mL) — medição 2', cab.densidade2],
+    ['Peso ME 1 (g) — média', mediaDez(cab.pesosEmbalagem1)],
+    ['Peso ME 2 (g) — média', mediaDez(cab.pesosEmbalagem2)],
     ['Mínimo (mL)', cab.minimoMl],
     ['Máximo (mL)', cab.maximoMl],
     ['Máquina (TAG)', cab.maquinaTag],
@@ -877,12 +1127,13 @@ function nomeArquivoExportacao(extensao) {
     .replace(/[^a-zA-Z0-9_-]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .toLowerCase();
-  return `controle-densidade_${lote || 'sem-lote'}_${hoje()}.${extensao}`;
+  return `carta-de-peso_${produtoAtual()?.codigo || ''}_${lote || 'sem-lote'}.${extensao}`;
 }
 
 async function exportarExcel() {
   try {
-    const res = await fetch('/api/controle-densidade/exportacao?formato=xlsx', { credentials: 'same-origin' });
+    await salvarPendente();
+    const res = await fetch(`/api/cartas/${state.controle.id}/exportacao?formato=xlsx`, { credentials: 'same-origin' });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error?.message || 'Não foi possível gerar o Excel.');
@@ -903,8 +1154,10 @@ async function exportarExcel() {
   try {
     const session = await api('/api/me');
     state.usuario = session.usuario;
-    await carregarControle();
-    render();
+    await carregarProdutos();
+    const codigo = lerPreferencia('produtoCodigo') || PRODUTO_PADRAO;
+    const inicial = state.produtos.find((p) => p.codigo === codigo) || state.produtos.find((p) => p.codigo === PRODUTO_PADRAO) || state.produtos[0];
+    await abrirProduto(inicial.id);
   } catch (err) {
     app.innerHTML = `<main class="loading">${h(err.message)}</main>`;
   }

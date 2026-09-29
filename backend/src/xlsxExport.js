@@ -54,7 +54,7 @@ async function gerarPlanilhaControleDensidade(dados) {
 
   // Cabeçalho
   ws.mergeCells('A1:C1');
-  ws.getCell('A1').value = 'REGISTRO DE QUALIDADE — RQ 6308 REV 03';
+  ws.getCell('A1').value = `REGISTRO DE QUALIDADE — RQ ${cab.rqNumero} REV ${cab.rqRevisao}`;
   ws.getCell('A1').font = estiloTitulo();
 
   ws.mergeCells(`A2:${ultimaColuna}2`);
@@ -67,7 +67,9 @@ async function gerarPlanilhaControleDensidade(dados) {
     ['Volume declarado (mL)', cab.volumeDeclaradoMl, 'Variação permitida (%)', cab.variacaoPermitidaPercentual],
     ['Máquina (TAG)', cab.maquinaTag, 'Linha', cab.linha],
     ['TAG Balança', cab.tagBalanca, 'Frequência (min)', cab.frequenciaMinutos],
+    ['Densidade (g/mL)', cab.densidadeProdutoGml, 'Peso Emb. Primária (g)', cab.pesoEmbPrimariaG],
   ];
+  const linhaEspecificacao = 8; // B8 = densidade (H7 da ficha), D8 = peso emb. primária (H8)
   let linha = 4;
   linhasCabecalho.forEach(([labelA, valorA, labelB, valorB]) => {
     ws.getCell(`A${linha}`).value = labelA;
@@ -128,7 +130,6 @@ async function gerarPlanilhaControleDensidade(dados) {
   ws.getCell(`C${linha}`).font = estiloFormula();
   ws.getCell(`B${linha}`).numFmt = '0.00';
   ws.getCell(`C${linha}`).numFmt = '0.00';
-  const linhaMediaTara = linha;
   ws.addConditionalFormatting({
     ref: `B${linha}:C${linha}`,
     rules: [{ type: 'expression', formulae: [`ROUND($B$${linha},2)<>ROUND($C$${linha},2)`], style: { fill: VERMELHO_FILL }, priority: 1 }],
@@ -144,7 +145,6 @@ async function gerarPlanilhaControleDensidade(dados) {
   ws.getCell(`C${linha}`).font = estiloInput();
   ws.getCell(`B${linha}`).numFmt = '0.0000';
   ws.getCell(`C${linha}`).numFmt = '0.0000';
-  const linhaDensidade = linha;
   ws.addConditionalFormatting({
     ref: `B${linha}:C${linha}`,
     rules: [{ type: 'expression', formulae: [`ROUND($B$${linha},4)<>ROUND($C$${linha},4)`], style: { fill: VERMELHO_FILL }, priority: 1 }],
@@ -212,7 +212,8 @@ async function gerarPlanilhaControleDensidade(dados) {
       const col = coluna(colIndex);
       const cell = ws.getCell(`${col}${linha}`);
       cell.value = {
-        formula: `IF(${col}${linhaPeso}="","",IF(OR($C$${linhaMediaTara}="",$C$${linhaDensidade}=0),"",(${col}${linhaPeso}-$C$${linhaMediaTara})/$C$${linhaDensidade}))`,
+        // =(peso-$H$8)/$H$7 da ficha: aqui H8 = $D$8 e H7 = $B$8 (valores do produto)
+        formula: `IF(${col}${linhaPeso}="","",IF(OR($B$${linhaEspecificacao}="",$B$${linhaEspecificacao}=0),"",(${col}${linhaPeso}-$D$${linhaEspecificacao})/$B$${linhaEspecificacao}))`,
       };
       cell.font = estiloFormula();
       cell.numFmt = '0.00';

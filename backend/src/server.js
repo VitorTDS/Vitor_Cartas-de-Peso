@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { URL } = require('node:url');
 const config = require('./config');
-const { migrate, all, get, run, auditar, db } = require('./db');
+const { migrate, all, get, run, auditar, db, CAMPOS_CONFIG_PRODUTO } = require('./db');
 const { gerarPlanilhaControleDensidade } = require('./xlsxExport');
 
 const publicDir = path.resolve(__dirname, '..', '..', 'frontend');
@@ -112,6 +112,8 @@ function mapUsuario(row) {
 function controlePadrao() {
   return {
     cabecalho: {
+      rqNumero: '6308',
+      rqRevisao: '03',
       produto: 'AGUALEMA SOBRAL 200 ML',
       lote: '260227',
       volumeDeclaradoMl: 200,
@@ -153,6 +155,8 @@ function normalizarControle(body) {
   const pesosEmbalagem2 = pesosDez(cabecalho.pesosEmbalagem2);
   return {
     cabecalho: {
+      rqNumero: texto(cabecalho, 'rqNumero', false),
+      rqRevisao: texto(cabecalho, 'rqRevisao', false),
       produto: texto(cabecalho, 'produto', false) || atual.cabecalho.produto,
       lote: texto(cabecalho, 'lote', false),
       volumeDeclaradoMl,
@@ -171,6 +175,8 @@ function normalizarControle(body) {
       mediaEmbalagem2: media(pesosEmbalagem2),
       densidade1: numero(cabecalho.densidade1, atual.cabecalho.densidade1),
       densidade2: numero(cabecalho.densidade2, atual.cabecalho.densidade2),
+      densidadeProdutoGml: numero(cabecalho.densidadeProdutoGml, 0),
+      pesoEmbPrimariaG: numero(cabecalho.pesoEmbPrimariaG, 0),
       minimoMl: volumeDeclaradoMl,
       maximoMl: volumeDeclaradoMl * (1 + variacaoPermitidaPercentual / 100),
       maquinaTag: texto(cabecalho, 'maquinaTag', false),
@@ -191,14 +197,90 @@ function normalizarControle(body) {
   };
 }
 
-function carregarControle() {
-  const row = get('SELECT dados_json, atualizado_em FROM controle_densidade WHERE id = 1');
-  if (!row) return { ...controlePadrao(), atualizadoEm: null };
+// --- Produtos e cartas de peso ----------------------------------------------
+
+function configDoProduto(produto) {
+  if (!produto.config_json) return null; // modelo da carta ainda não cadastrado
+  const config = JSON.parse(produto.config_json);
+  return Object.fromEntries(CAMPOS_CONFIG_PRODUTO.map((campo) => [campo, config[campo]]));
+}
+
+// O cabeçalho fixo vem sempre do produto; do cliente só se aceitam lote e pesagens.
+function dadosComConfig(body, produto) {
+  const cabecalho = { ...(body.cabecalho || {}), ...configDoProduto(produto) };
+  return normalizarControle({ ...body, cabecalho });
+}
+
+function dadosCartaNova(produto) {
+  return dadosComConfig({
+    cabecalho: {
+      lote: '',
+      densidade1: 0,
+      densidade2: 0,
+      impressoPor: '',
+      conferidoPor: '',
+    },
+    verificacoes: [],
+  }, produto);
+}
+
+// Carta aberta sempre exibe o modelo atual do produto; carta salva é o retrato
+// exato do que foi gravado na finalização.
+function mapCarta(row) {
+  const gravados = JSON.parse(row.dados_json);
+  const produto = row.status === 'aberta' ? get('SELECT * FROM produtos_carta WHERE id = ?', [row.produto_id]) : null;
+  const dados = produto?.config_json ? dadosComConfig(gravados, produto) : normalizarControle(gravados);
+  return {
+    id: row.id,
+    produtoId: row.produto_id,
+    status: row.status,
+    lote: row.lote,
+    criadoEm: row.criado_em,
+    atualizadoEm: row.atualizado_em,
+    finalizadaEm: row.finalizada_em,
+    ...dados,
+  };
+}
+
+// Mesma regra da ficha: volume = (peso - H8) / H7, com H7/H8 do modelo do produto.
+function resumoCarta(dados) {
+  const cab = dados.cabecalho;
+  const medias = dados.verificacoes.map((v) => {
+    const volumes = v.pesos.filter((p) => p > 0 && cab.densidadeProdutoGml > 0)
+      .map((p) => (p - cab.pesoEmbPrimariaG) / cab.densidadeProdutoGml);
+    return volumes.length ? volumes.reduce((s, x) => s + x, 0) / volumes.length : null;
+  }).filter((m) => m !== null);
+  return {
+    verificacoesPreenchidas: medias.length,
+    foraDaFaixa: medias.some((m) => m < cab.minimoMl || m > cab.maximoMl),
+  };
+}
+
+function buscarProduto(id) {
+  return get('SELECT * FROM produtos_carta WHERE id = ? AND ativo = 1', [id]);
+}
+
+function buscarCarta(id) {
+  return get('SELECT * FROM cartas_peso WHERE id = ?', [id]);
+}
+
+function emTransacao(fn) {
+  db.exec('BEGIN IMMEDIATE');
   try {
-    return { ...normalizarControle(JSON.parse(row.dados_json)), atualizadoEm: row.atualizado_em };
-  } catch {
-    return { ...controlePadrao(), atualizadoEm: row.atualizado_em };
+    const resultado = fn();
+    db.exec('COMMIT');
+    return resultado;
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
   }
+}
+
+function nomeArquivoCarta(carta) {
+  const lote = String(carta.lote || 'sem-lote')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase();
+  return `carta-de-peso_${lote || 'sem-lote'}_${carta.id}.xlsx`;
 }
 
 function servirArquivo(req, res) {
@@ -242,37 +324,125 @@ async function api(req, res) {
     return json(res, 200, { usuario });
   }
 
-  if (pathName === '/api/controle-densidade') {
-    if (method === 'GET') return json(res, 200, carregarControle());
-    if (method === 'PUT') {
-      const anterior = carregarControle();
-      const dados = normalizarControle(await lerBody(req));
-      run('UPDATE controle_densidade SET dados_json = ?, atualizado_em = CURRENT_TIMESTAMP WHERE id = 1', [JSON.stringify(dados)]);
-      auditar(usuario, 'controle_densidade', 1, 'salvou', anterior, dados);
-      return json(res, 200, carregarControle());
-    }
-  }
-
-  if (method === 'GET' && pathName === '/api/controle-densidade/exportacao') {
-    if (url.searchParams.get('formato') !== 'xlsx') {
-      return erro(res, 400, 'INVALID_REQUEST', 'Informe formato=xlsx.');
-    }
-    const dados = carregarControle();
-    const buffer = await gerarPlanilhaControleDensidade(dados);
-    const lote = (dados.cabecalho.lote || 'sem-lote')
-      .normalize('NFD').replace(/[̀-ͯ]/g, '')
-      .replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase();
-    const nomeArquivo = `controle-densidade_${lote || 'sem-lote'}.xlsx`;
-    res.writeHead(200, {
-      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'Content-Disposition': `attachment; filename="${nomeArquivo}"`,
-      'Cache-Control': 'no-store',
-      ...securityHeaders(),
+  if (method === 'GET' && pathName === '/api/produtos') {
+    const produtos = all(`
+      SELECT p.*,
+        (SELECT id FROM cartas_peso c WHERE c.produto_id = p.id AND c.status = 'aberta') AS carta_aberta_id,
+        (SELECT COUNT(*) FROM cartas_peso c WHERE c.produto_id = p.id AND c.status = 'finalizada') AS total_salvas
+      FROM produtos_carta p WHERE p.ativo = 1 ORDER BY p.nome
+    `);
+    return json(res, 200, {
+      data: produtos.map((p) => ({
+        id: p.id,
+        codigo: p.codigo,
+        nome: p.nome,
+        modeloPronto: Boolean(p.config_json),
+        config: configDoProduto(p),
+        cartaAbertaId: p.carta_aberta_id,
+        totalSalvas: p.total_salvas,
+      })),
     });
-    return res.end(buffer);
   }
 
-  return erro(res, 404, 'NOT_FOUND', 'Modulo indisponivel nesta versao. Use o Controle de Densidade.');
+  let rota = /^\/api\/produtos\/(\d+)\/carta-aberta$/.exec(pathName);
+  if (rota && method === 'GET') {
+    const produto = buscarProduto(Number(rota[1]));
+    if (!produto) return erro(res, 404, 'NOT_FOUND', 'Produto não encontrado.');
+    const carta = get("SELECT * FROM cartas_peso WHERE produto_id = ? AND status = 'aberta'", [produto.id]);
+    if (!carta) return erro(res, 404, 'NOT_FOUND', 'Este produto não tem carta aberta.');
+    return json(res, 200, mapCarta(carta));
+  }
+
+  rota = /^\/api\/produtos\/(\d+)\/cartas$/.exec(pathName);
+  if (rota) {
+    const produto = buscarProduto(Number(rota[1]));
+    if (!produto) return erro(res, 404, 'NOT_FOUND', 'Produto não encontrado.');
+    if (method === 'GET') {
+      const status = url.searchParams.get('status') || 'finalizada';
+      if (!['aberta', 'finalizada'].includes(status)) return erro(res, 400, 'INVALID_REQUEST', 'status deve ser aberta ou finalizada.');
+      const cartas = all(
+        'SELECT * FROM cartas_peso WHERE produto_id = ? AND status = ? ORDER BY COALESCE(finalizada_em, criado_em) DESC, id DESC',
+        [produto.id, status],
+      );
+      return json(res, 200, {
+        data: cartas.map((row) => {
+          const carta = mapCarta(row);
+          return { id: carta.id, lote: carta.lote, status: carta.status, criadoEm: carta.criadoEm, finalizadaEm: carta.finalizadaEm, ...resumoCarta(carta) };
+        }),
+      });
+    }
+    if (method === 'POST') {
+      if (!produto.config_json) {
+        return erro(res, 422, 'MODELO_PENDENTE', 'O modelo da carta de peso deste produto ainda não foi cadastrado.');
+      }
+      const aberta = get("SELECT id FROM cartas_peso WHERE produto_id = ? AND status = 'aberta'", [produto.id]);
+      if (aberta) {
+        return erro(res, 409, 'CARTA_ABERTA_EXISTENTE', 'Este produto já tem uma carta aberta.', [{ field: 'cartaAbertaId', message: String(aberta.id) }]);
+      }
+      const dados = dadosCartaNova(produto);
+      const criada = run('INSERT INTO cartas_peso (produto_id, lote, status, dados_json) VALUES (?, ?, ?, ?)', [produto.id, '', 'aberta', JSON.stringify(dados)]);
+      auditar(usuario, 'cartas_peso', criada.lastInsertRowid, 'criou', null, dados);
+      return json(res, 201, mapCarta(buscarCarta(criada.lastInsertRowid)), { Location: `/api/cartas/${criada.lastInsertRowid}` });
+    }
+  }
+
+  rota = /^\/api\/cartas\/(\d+)(?:\/(finalizacao|exportacao))?$/.exec(pathName);
+  if (rota) {
+    const carta = buscarCarta(Number(rota[1]));
+    if (!carta) return erro(res, 404, 'NOT_FOUND', 'Carta não encontrada.');
+    const acao = rota[2];
+
+    if (!acao && method === 'GET') return json(res, 200, mapCarta(carta));
+
+    if (!acao && method === 'PUT') {
+      if (carta.status === 'finalizada') return erro(res, 409, 'CARTA_FINALIZADA', 'Esta carta já foi salva e não pode ser alterada.');
+      const produto = get('SELECT * FROM produtos_carta WHERE id = ?', [carta.produto_id]);
+      const dados = dadosComConfig(await lerBody(req), produto);
+      run(
+        "UPDATE cartas_peso SET dados_json = ?, lote = ?, atualizado_em = CURRENT_TIMESTAMP WHERE id = ? AND status = 'aberta'",
+        [JSON.stringify(dados), dados.cabecalho.lote, carta.id],
+      );
+      auditar(usuario, 'cartas_peso', carta.id, 'salvou rascunho', JSON.parse(carta.dados_json), dados);
+      return json(res, 200, mapCarta(buscarCarta(carta.id)));
+    }
+
+    if (acao === 'finalizacao' && method === 'POST') {
+      if (carta.status === 'finalizada') return erro(res, 409, 'CARTA_FINALIZADA', 'Esta carta já foi salva.');
+      const produto = get('SELECT * FROM produtos_carta WHERE id = ?', [carta.produto_id]);
+      const body = await lerBody(req);
+      // O cliente manda o estado atual junto, para não depender do autosave ter terminado.
+      const dados = body.cabecalho ? dadosComConfig(body, produto) : mapCarta(carta);
+      const { id: _id, produtoId: _p, status: _s, lote: _l, criadoEm: _c, atualizadoEm: _a, finalizadaEm: _f, ...somenteDados } = dados;
+      if (!String(somenteDados.cabecalho.lote || '').trim()) {
+        return erro(res, 422, 'LOTE_OBRIGATORIO', 'Informe o lote antes de salvar a carta.', [{ field: 'lote', message: 'obrigatório' }]);
+      }
+      emTransacao(() => {
+        run(
+          "UPDATE cartas_peso SET dados_json = ?, lote = ?, status = 'finalizada', finalizada_em = CURRENT_TIMESTAMP, atualizado_em = CURRENT_TIMESTAMP WHERE id = ? AND status = 'aberta'",
+          [JSON.stringify(somenteDados), somenteDados.cabecalho.lote, carta.id],
+        );
+        auditar(usuario, 'cartas_peso', carta.id, 'finalizou', JSON.parse(carta.dados_json), somenteDados);
+      });
+      return json(res, 200, mapCarta(buscarCarta(carta.id)));
+    }
+
+    if (acao === 'exportacao' && method === 'GET') {
+      if (url.searchParams.get('formato') !== 'xlsx') return erro(res, 400, 'INVALID_REQUEST', 'Informe formato=xlsx.');
+      const dados = mapCarta(carta);
+      const buffer = await gerarPlanilhaControleDensidade(dados);
+      res.writeHead(200, {
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Content-Disposition': `attachment; filename="${nomeArquivoCarta(dados)}"`,
+        'Cache-Control': 'no-store',
+        ...securityHeaders(),
+      });
+      return res.end(buffer);
+    }
+
+    return erro(res, 405, 'METHOD_NOT_ALLOWED', 'Método não permitido nesta rota.');
+  }
+
+  return erro(res, 404, 'NOT_FOUND', 'Rota não encontrada.');
 }
 
 migrate();

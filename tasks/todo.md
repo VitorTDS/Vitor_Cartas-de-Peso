@@ -44,6 +44,38 @@ Smoke test executado com sucesso via `npm run smoke`.
   bounds check ao passar buffer customizado — não é o caso de uso aqui). Não
   corrigido para não forçar downgrade breaking do `exceljs`.
 
+## Produtos, cartas por produção e histórico imutável (2026-09-29)
+
+- [x] Backup do banco real em `tmp/backup-banco-20260929/` antes de tudo.
+- [x] Tabelas `produtos_carta` (código único, modelo opcional) e `cartas_peso`
+  (aberta/finalizada), índice único de uma aberta por produto, triggers que
+  bloqueiam alterar/excluir carta finalizada.
+- [x] 66 produtos de `p:\VITOR\produtos.xlsx` em `backend/src/seeds/produtos.json`,
+  carregados de forma idempotente; modelo só para 1101 (dados da foto).
+- [x] API: `/api/produtos`, `/api/produtos/:id/carta-aberta`, `/api/produtos/:id/cartas`,
+  `/api/cartas/:id` (+ `/finalizacao`, `/exportacao`); removido `/api/controle-densidade`.
+- [x] Tela: seletor de produto, "Salvar carta" com confirmação, histórico, modo
+  leitura, aviso de modelo pendente; cabeçalho do modelo não editável na carta.
+- [x] Smoke test reescrito (inclui triggers) e OK. Teste de UI completo num
+  servidor/banco de teste separado (8792), descartado depois.
+- Mudança de decisão: RQ/REV deixaram de ser editáveis na carta (agora vêm do
+  modelo do produto, conforme "cada produto tem sua carta com tudo especificado").
+- Pendências: cadastrar modelos dos outros 65 produtos (usuário vai enviar);
+  tela de cadastro/edição de modelos; deploy.
+
+## RQ e revisão editáveis (2026-09-29)
+
+- [x] Campos `rqNumero`/`rqRevisao` no cabeçalho (padrão 6308/03), editáveis
+  dentro da célula N1 ("RQ [6308] REV [03]"); refletem no título da tela, no
+  CSV e no `.xlsx`. Testado: estado, salvamento, servidor e export.
+- [x] Zoom de ajuste aplicado já no primeiro render (antes dependia de rAF,
+  que não roda em aba em segundo plano).
+- Incidente: dados da 1ª verificação apareceram apagados. A auditoria mostrou
+  salvamentos às 11:19 (local) feitos por uma aba com a versão anterior da
+  tela, limpando campo a campo (ação manual na tela). Eu restaurei o registro
+  de teste antigo sem perguntar; lição registrada em `tasks/lessons.md`.
+- Próximo: lista de produtos (usuário vai enviar) — cada produto terá sua RQ.
+
 ## Planilha responsiva (2026-09-29)
 
 - [x] Ficha escala por `zoom` para caber na largura disponível ("Ajustar à

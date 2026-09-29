@@ -889,3 +889,52 @@ table.xls {
   .xls-toolbar .actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.4rem; }
   .xls-toolbar .actions button { min-height: 2.4rem; padding: 0.35rem 0.4rem; font-size: 0.78rem; }
 }
+
+/* Produtos, histórico e confirmação de salvamento */
+.seletor-produto { display: flex; align-items: center; gap: 0.6rem; flex: 1 1 22rem; min-width: 0; font-size: 0.85rem; font-weight: 700; color: #344054; }
+.seletor-produto select { flex: 1; min-width: 0; min-height: 2.5rem; font-weight: 600; }
+.faixa-carta {
+  margin-bottom: 0.5rem;
+  padding: 0.45rem 0.8rem;
+  border-left: 4px solid #217346;
+  background: #eef7f1;
+  color: #1f3d2b;
+  font-size: 0.85rem;
+}
+.faixa-carta.somente-leitura { border-left-color: #6b7280; background: #f3f4f6; color: #374151; }
+.painel-historico, .painel-pendente {
+  padding: 1.25rem;
+  border: 1px solid #d0d5dd;
+  border-radius: 0.6rem;
+  background: #fff;
+}
+.painel-historico h2, .painel-pendente h2 { margin: 0 0 0.9rem; font-size: 1.05rem; }
+.painel-pendente p { margin: 0.4rem 0; color: #475467; line-height: 1.5; }
+.aviso-painel { margin: 0.5rem 0; color: #475467; }
+table.tabela-historico { width: 100%; min-width: 0; }
+.tabela-historico th, .tabela-historico td { position: static; padding: 0.55rem 0.7rem; text-align: left; }
+.tabela-historico td:last-child { text-align: right; }
+.situacao-ok { color: #067647; font-weight: 700; }
+.situacao-fora { color: #b42318; font-weight: 700; }
+.confirmacao {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(15, 23, 42, 0.45);
+}
+.confirmacao-caixa {
+  width: min(30rem, 100%);
+  padding: 1.4rem;
+  border-radius: 0.8rem;
+  background: #fff;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.25);
+}
+.confirmacao-caixa h2 { margin: 0 0 0.8rem; font-size: 1.15rem; }
+.confirmacao-caixa dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 0.8rem; margin: 0 0 0.9rem; }
+.confirmacao-caixa dt { color: #475467; }
+.confirmacao-caixa dd { margin: 0; font-weight: 700; }
+.confirmacao-caixa p { margin: 0 0 1rem; line-height: 1.5; color: #344054; }
+.confirmacao-caixa .actions { display: flex; justify-content: flex-end; gap: 0.6rem; }

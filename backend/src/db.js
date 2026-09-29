@@ -241,6 +241,46 @@ function migrate() {
       atualizado_em TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- config_json NULL = modelo da carta ainda não cadastrado para o produto.
+    CREATE TABLE IF NOT EXISTS produtos_carta (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      codigo TEXT NOT NULL UNIQUE,
+      nome TEXT NOT NULL,
+      config_json TEXT,
+      ativo INTEGER NOT NULL DEFAULT 1 CHECK (ativo IN (0, 1)),
+      criado_em TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      atualizado_em TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS cartas_peso (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      produto_id INTEGER NOT NULL REFERENCES produtos_carta(id) ON DELETE RESTRICT,
+      lote TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'aberta' CHECK (status IN ('aberta', 'finalizada')),
+      dados_json TEXT NOT NULL,
+      criado_em TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      atualizado_em TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      finalizada_em TEXT
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_cartas_peso_uma_aberta ON cartas_peso(produto_id) WHERE status = 'aberta';
+    CREATE INDEX IF NOT EXISTS idx_cartas_peso_historico ON cartas_peso(produto_id, status, finalizada_em);
+
+    -- Carta salva é imutável e nenhuma carta pode ser apagada, nem por acesso
+    -- direto ao banco. Correções viram uma carta nova.
+    CREATE TRIGGER IF NOT EXISTS trg_cartas_peso_finalizada_imutavel
+    BEFORE UPDATE ON cartas_peso
+    WHEN OLD.status = 'finalizada'
+    BEGIN
+      SELECT RAISE(ABORT, 'Carta de peso finalizada não pode ser alterada.');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_cartas_peso_sem_exclusao
+    BEFORE DELETE ON cartas_peso
+    BEGIN
+      SELECT RAISE(ABORT, 'Cartas de peso não podem ser excluídas.');
+    END;
+
     CREATE INDEX IF NOT EXISTS idx_cartas_filtros ON cartas(produto_id, lote, status, data_abertura);
     CREATE INDEX IF NOT EXISTS idx_coletas_carta ON coletas(carta_id, numero_coleta);
     CREATE INDEX IF NOT EXISTS idx_auditoria_entidade ON auditoria(entidade, entidade_id);
@@ -332,6 +372,67 @@ function migrate() {
     },
     verificacoes: []
   })]);
+
+  carregarCadastroProdutos();
+}
+
+// Campos do cabeçalho que pertencem ao produto (fixos em todas as cartas dele).
+// O resto do cabeçalho (lote, taras, densidades, impresso/conferido) é da carta.
+const CAMPOS_CONFIG_PRODUTO = [
+  'rqNumero', 'rqRevisao', 'produto', 'volumeDeclaradoMl', 'variacaoPermitidaPercentual',
+  'maquinaTag', 'linha', 'tagBalanca', 'frequenciaMinutos', 'toleranciaMinutos',
+  // H7 e H8 da ficha: especificados por produto e usados no cálculo do volume.
+  'densidadeProdutoGml', 'pesoEmbPrimariaG',
+];
+
+// Modelos de carta já recebidos, por código de produto. Os demais produtos ficam
+// com o modelo pendente até o usuário enviar a especificação de cada um.
+// 1101: cabeçalho da ficha RQ 6308 REV 03 enviada pelo usuário (foto, 2026-09-29).
+const MODELOS_CARTA = {
+  1101: {
+    rqNumero: '6308',
+    rqRevisao: '03',
+    produto: 'AGUALEMÃ SOBRAL 100 ML',
+    volumeDeclaradoMl: 100,
+    variacaoPermitidaPercentual: 2,
+    maquinaTag: 'ECH-501013',
+    linha: '1',
+    tagBalanca: 'BAL-501004',
+    frequenciaMinutos: 30,
+    toleranciaMinutos: 10,
+    densidadeProdutoGml: 1.0066,
+    pesoEmbPrimariaG: 16.93,
+  },
+};
+
+// Idempotente: insere produtos novos do cadastro e aplica modelos a produtos que
+// ainda não têm um. Nunca sobrescreve modelo existente nem remove produto.
+// Obs.: a antiga carta única (controle_densidade) permanece intacta; ela era
+// dado de teste do 200 ML, produto que ainda não tem modelo oficial.
+function carregarCadastroProdutos() {
+  const { produtos } = JSON.parse(fs.readFileSync(path.join(__dirname, 'seeds', 'produtos.json'), 'utf8'));
+  db.exec('BEGIN');
+  try {
+    produtos.forEach(({ codigo, nome }) => {
+      const novo = run('INSERT OR IGNORE INTO produtos_carta (codigo, nome) VALUES (?, ?)', [codigo, nome]);
+      if (novo.changes) auditar(null, 'produtos_carta', novo.lastInsertRowid, 'cadastrou', null, { codigo, nome });
+    });
+    Object.entries(MODELOS_CARTA).forEach(([codigo, modelo]) => {
+      const produto = get('SELECT id, config_json FROM produtos_carta WHERE codigo = ?', [codigo]);
+      if (!produto) return;
+      const atual = produto.config_json ? JSON.parse(produto.config_json) : null;
+      // Só acrescenta campos que faltam; nunca sobrescreve valor já definido.
+      const faltantes = Object.fromEntries(Object.entries(modelo).filter(([campo]) => !atual || !(campo in atual)));
+      if (!Object.keys(faltantes).length) return;
+      const novo = { ...(atual || {}), ...faltantes };
+      run('UPDATE produtos_carta SET config_json = ?, atualizado_em = CURRENT_TIMESTAMP WHERE id = ?', [JSON.stringify(novo), produto.id]);
+      auditar(null, 'produtos_carta', produto.id, atual ? 'completou modelo da carta' : 'definiu modelo da carta', atual, novo);
+    });
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
 }
 
 function all(sql, params = []) {
@@ -378,4 +479,4 @@ function registrarAssinatura(usuario, acao, entidade, entidadeId, metodo, observ
   );
 }
 
-module.exports = { db, migrate, all, get, run, auditar, registrarAcesso, registrarAssinatura };
+module.exports = { db, migrate, all, get, run, auditar, registrarAcesso, registrarAssinatura, CAMPOS_CONFIG_PRODUTO };
